@@ -95,7 +95,8 @@ tail ~/.claude/busybar-daemon.log
   `path`+`new_path`（跨目录可用，但移入 appmeta 的受监视文件名会被 400 拒）。
 - 动画元素：`stock_path:"shared/<file>.anim"` 或 `path:"<file>.anim"`
   （相对 `/ext/apps_assets/<application_name>/`），`loop:true`；后画的元素
-  叠在先画的上面（文字可覆盖动画）。
+  叠在先画的上面（文字可覆盖动画）。正在播放的 .anim 无法覆盖上传
+  （"Failed to open file for writing"），需先清掉元素释放文件句柄。
 - **专注会话运行期间 canvas 全被屏蔽**：文档称会话优先级 90、draw 接受
   1–100，但实测会话运行时优先级 91/95/99/100 一律 409——1.1.1 没有任何
   办法在会话画面上叠加内容。

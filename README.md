@@ -127,6 +127,9 @@ Things discovered the hard way, verified on-device:
   `/api/busy/profiles/{busy|custom}`.
 - `storage` API: write = POST raw body, remove = **DELETE**, rename takes
   `path` + `new_path`.
+- Re-uploading an `.anim` that is currently being played fails with
+  "Failed to open file for writing" — clear the element (freeing the file
+  handle) before uploading.
 
 ## Repo layout
 

@@ -6,8 +6,9 @@ The ring is drawn PER-PIXEL along the 172px perimeter path at 25 fps and
 played natively by the device's anim decoder, which is exactly how the
 built-in keep_out theme gets its smoothness.
 
-Format reference: firmware lib/anim_file/anim_file_format.h (+ RLE from
-lib/toolbox/rle_encode.c / scripts/flipper/rle.py).
+Format reference: the firmware's "File Formats" documentation page and
+the public struct layouts in lib/anim_file/anim_file_format.h. The RLE
+codec here is an independent implementation of that documented format.
 
 Usage:
     python3 animgen.py out_dir/     # writes work.anim, think.anim, ...
@@ -133,59 +134,59 @@ def anim_idle():
 # --------------------------------------------------------------------------
 
 MAX_BLOCKS = 127
-RLE_THRESHOLD = 3
 
 
-def rle_compress(source: bytes, blk: int) -> bytes:
-    """Port of scripts/flipper/rle.py (compatible with toolbox/rle_encode)."""
-    src_i, src_len = 0, len(source)
-    dest = bytearray()
-    while src_i < src_len:
-        repeat = 0
-        first = source[src_i:src_i + blk]
-        for i in range(src_i, src_len, blk):
-            if source[i:i + blk] == first:
-                repeat += 1
-            else:
-                break
-        repeat = min(repeat, MAX_BLOCKS)
-        if repeat == 0:
-            break
-        if repeat < RLE_THRESHOLD:
-            rep, verbatim = 0, 0
-            for i in range(src_i, src_len, blk):
-                if source[i:i + blk] == source[i + blk:i + 2 * blk]:
-                    rep += 1
-                    if rep > RLE_THRESHOLD:
-                        break
-                else:
-                    verbatim += 1 + rep
-                    rep = 0
-            verbatim += rep
-            verbatim = min(verbatim, MAX_BLOCKS)
-            dest.append(0x80 | verbatim)
-            dest.extend(source[src_i:src_i + verbatim * blk])
-            src_i += verbatim * blk
+def rle_compress(data: bytes, blk: int) -> bytes:
+    """Encode to the firmware's RLE stream format.
+
+    The format (documented in the firmware's File Formats page): a stream
+    of opcode bytes, each followed by payload. Opcode with the high bit
+    set (0x80|n, 1<=n<=127) introduces n literal blocks; opcode without
+    it (n, 1<=n<=127) repeats the single following block n times. Any
+    grouping that follows those rules is a valid stream; we emit a repeat
+    op for runs of 3+ equal blocks (below that a literal is no larger).
+    """
+    blocks = [data[i:i + blk] for i in range(0, len(data), blk)]
+    out = bytearray()
+    literals: list[bytes] = []
+
+    def flush():
+        for j in range(0, len(literals), MAX_BLOCKS):
+            chunk = literals[j:j + MAX_BLOCKS]
+            out.append(0x80 | len(chunk))
+            out.extend(b"".join(chunk))
+        literals.clear()
+
+    i, n = 0, len(blocks)
+    while i < n:
+        run = 1
+        while run < MAX_BLOCKS and i + run < n and blocks[i + run] == blocks[i]:
+            run += 1
+        if run >= 3:
+            flush()
+            out.append(run)
+            out.extend(blocks[i])
         else:
-            dest.append(repeat)
-            dest.extend(first)
-            src_i += repeat * blk
-    return bytes(dest)
+            literals.extend(blocks[i:i + run])
+        i += run
+    flush()
+    return bytes(out)
 
 
-def rle_decompress(source: bytes, blk: int) -> bytes:
-    src_i, dest = 0, bytearray()
-    while src_i < len(source):
-        op = source[src_i]
-        count = op & 0x7F
-        src_i += 1
+def rle_decompress(data: bytes, blk: int) -> bytes:
+    out = bytearray()
+    i = 0
+    while i < len(data):
+        op = data[i]
+        n = op & 0x7F
+        i += 1
         if op & 0x80:
-            dest.extend(source[src_i:src_i + count * blk])
-            src_i += count * blk
+            out += data[i:i + n * blk]
+            i += n * blk
         else:
-            dest.extend(source[src_i:src_i + blk] * count)
-            src_i += blk
-    return bytes(dest)
+            out += data[i:i + blk] * n
+            i += blk
+    return bytes(out)
 
 
 def encode_anim(display_frames: list[bytes], fps: int = FPS) -> bytes:
