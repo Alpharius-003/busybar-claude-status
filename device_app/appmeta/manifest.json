@@ -1,0 +1,9 @@
+{
+    "format_version": 1,
+    "id": "org.anthropic.claude_status",
+    "name": "Claude Status",
+    "version": "1.0.0",
+    "description": "Live Claude Code session status: state ring, model, effort, context and plan usage",
+    "author": "alpharius_003",
+    "heap_size_kib": 64
+}

@@ -1,0 +1,10 @@
+__pycache__/
+*.pyc
+.DS_Store
+# generated animation artifacts (rebuild with: python3 animgen.py anims/)
+anims/
+# downloaded from your device at http://10.0.4.20/openapi.yaml
+device-openapi.yaml
+# personal device backups
+custom_profile.backup.json
+*.backup-busybar-*
