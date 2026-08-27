@@ -619,9 +619,15 @@ def log(msg: str):
     print(f"[{time.strftime('%H:%M:%S')}] {msg}", file=sys.stderr, flush=True)
 
 
+class _Server(ThreadingHTTPServer):
+    # On Windows SO_REUSEADDR lets a second process bind the same port,
+    # which would break the single-instance guarantee.
+    allow_reuse_address = os.name != "nt"
+
+
 def serve_on(addr: str) -> ThreadingHTTPServer | None:
     try:
-        server = ThreadingHTTPServer((addr, LISTEN_PORT), Handler)
+        server = _Server((addr, LISTEN_PORT), Handler)
     except OSError:
         return None
     threading.Thread(target=server.serve_forever, daemon=True).start()

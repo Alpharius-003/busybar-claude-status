@@ -65,8 +65,14 @@ selectable via `BUSYBAR_TRANSPORT`; a BLE transport is designed. See
 
 ## Install
 
-Requirements: macOS/Linux, Python 3.9+, a BUSY Bar connected over USB
-(firmware 1.1.x), Claude Code with statusline + hooks support.
+Requirements: macOS, Linux or Windows; Python 3.9+; a BUSY Bar
+connected over USB (firmware 1.1.x); Claude Code with statusline +
+hooks support. On Windows use `py`/`python` instead of `python3` —
+every entry point resolves the interpreter via `sys.executable`, and
+the glue layer (`report.py`, `adapters/codex_notify.py`) is pure Python
+with no bash/nohup/pgrep dependencies. (`report.sh` remains for
+existing POSIX installs.) Windows support is implemented per spec but
+not yet tested on real hardware — issues welcome.
 
 ```bash
 git clone https://github.com/Alpharius-003/busybar-claude-status
@@ -178,7 +184,7 @@ Things discovered the hard way, verified on-device:
 | File | Purpose |
 | --- | --- |
 | `daemon.py` | session store + `/status` + device renderer (stdlib only) |
-| `report.sh` | statusline/hook forwarder; auto-spawns the daemon |
+| `report.py` / `report.sh` | statusline/hook forwarder; auto-spawns the daemon (`.py` = cross-platform, `.sh` = POSIX legacy) |
 | `setup_claude.py` | wire into / out of `~/.claude` (with backups) |
 | `animgen.py` | `.anim` (bicycle0) encoder + the six ring animations |
 | `claude_card.py` | bind the CUSTOM key to the claude theme (and restore) |

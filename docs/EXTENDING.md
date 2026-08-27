@@ -77,7 +77,8 @@ An adapter is just "run curl at the right moments":
   `window_minutes`: 10080 → `7d`). Run it alongside the daemon:
   `python3 adapters/codex_status.py` — or better, make it
   **auto-start**: `python3 adapters/install_codex_autostart.py install`
-  wires Codex's `notify` hook to `adapters/codex_notify.sh`, which
+  wires Codex's `notify` hook to `adapters/codex_notify.py`
+  (cross-platform), which
   chains your previous notifier (preserved verbatim), keeps the daemon +
   adapter alive on every Codex turn, and pushes the turn's end state
   instantly. `uninstall` restores everything. (Codex *skills* are

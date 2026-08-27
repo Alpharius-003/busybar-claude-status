@@ -25,8 +25,9 @@ import time
 
 HERE = pathlib.Path(__file__).resolve().parent
 CONFIG = pathlib.Path.home() / ".codex" / "config.toml"
-CHAIN = HERE / "codex_notify_chain.sh"
-WRAPPER = HERE / "codex_notify.sh"
+CHAIN = HERE / "codex_notify_chain.json"
+CHAIN_SH = HERE / "codex_notify_chain.sh"  # legacy (pre-Windows installs)
+WRAPPER = HERE / "codex_notify.py"
 
 
 def read_notify(text: str):
@@ -45,9 +46,19 @@ def install():
     text = CONFIG.read_text()
     argv, line = read_notify(text)
 
-    new_argv = ["bash", str(WRAPPER)]
-    if argv == new_argv:
-        print("notify already points at the wrapper - nothing to do")
+    new_argv = [sys.executable, str(WRAPPER)]
+    if argv and any("codex_notify" in str(a) for a in argv):
+        if argv == new_argv:
+            print("notify already points at the wrapper - nothing to do")
+            return
+        # An older busybar wrapper (e.g. the bash one): just repoint;
+        # the preserved chain files keep working as-is.
+        backup = CONFIG.with_name(
+            f"config.toml.backup-busybar-{time.strftime('%Y%m%d%H%M%S')}")
+        shutil.copy2(CONFIG, backup)
+        print(f"backup: {backup}")
+        CONFIG.write_text(text.replace(line, "notify = " + json.dumps(new_argv), 1))
+        print(f"notify -> {WRAPPER.name} (upgraded from the shell wrapper)")
         return
 
     backup = CONFIG.with_name(f"config.toml.backup-busybar-{time.strftime('%Y%m%d%H%M%S')}")
@@ -55,13 +66,7 @@ def install():
     print(f"backup: {backup}")
 
     if argv:
-        quoted = " ".join(f'"{a}"' for a in argv)
-        CHAIN.write_text(
-            "#!/bin/bash\n"
-            "# Your pre-busybar Codex notifier, preserved by install_codex_autostart.py.\n"
-            f'exec {quoted} "$@"\n'
-        )
-        CHAIN.chmod(0o755)
+        CHAIN.write_text(json.dumps(argv))
         print(f"previous notifier preserved -> {CHAIN.name}")
 
     new_line = "notify = " + json.dumps(new_argv)
@@ -78,11 +83,16 @@ def uninstall():
     argv, line = read_notify(text)
     if not line or str(WRAPPER) not in json.dumps(argv or []):
         sys.exit("notify is not pointing at the wrapper - nothing to undo")
+    argv_restored = None
     if CHAIN.exists():
-        original = re.search(r'^exec (.+) "\$@"$', CHAIN.read_text(), re.M)
-        argv_restored = re.findall(r'"([^"]*)"', original.group(1)) if original else []
-        CONFIG.write_text(text.replace(line, "notify = " + json.dumps(argv_restored), 1))
+        argv_restored = json.loads(CHAIN.read_text())
         CHAIN.unlink()
+    elif CHAIN_SH.exists():
+        original = re.search(r'^exec (.+) "\$@"$', CHAIN_SH.read_text(), re.M)
+        argv_restored = re.findall(r'"([^"]*)"', original.group(1)) if original else []
+        CHAIN_SH.unlink()
+    if argv_restored is not None:
+        CONFIG.write_text(text.replace(line, "notify = " + json.dumps(argv_restored), 1))
         print("original notifier restored")
     else:
         CONFIG.write_text(text.replace(line + "\n", "", 1).replace(line, "", 1))

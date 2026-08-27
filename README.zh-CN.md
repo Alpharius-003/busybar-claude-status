@@ -3,7 +3,9 @@
 把 Claude Code 终端 StatusBar 的信息（Model、effort、context window、plan 用量）
 和当前会话状态实时显示到 Busy Bar 的前置 LED 屏（72×16）上。
 
-[English docs](README.md) ｜ 安装：`python3 setup_claude.py install`
+[English docs](README.md) ｜ 支持 macOS / Linux / **Windows**（Windows 用
+`py setup_claude.py install`，胶水层为纯 Python 无 bash 依赖，硬件实测
+仅覆盖 macOS）｜ 安装：`python3 setup_claude.py install`
 （自动备份并接入 `~/.claude` 的 statusline 与 hooks，`uninstall` 可完整还原；
 动画资产用 `python3 animgen.py anims/` 生成后经 `/api/assets/upload` 上传，
 详见英文 README 的 Install 一节）。
