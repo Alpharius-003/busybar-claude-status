@@ -167,19 +167,40 @@ def post(report: dict) -> bool:
         return False
 
 
+def _emit(verbose: bool):
+    report = probe()
+    if report:
+        if verbose:
+            print(json.dumps(report, ensure_ascii=False), flush=True)
+        post(report)
+    elif verbose:
+        print("no codex data found", flush=True)
+
+
 def main():
     once = "--once" in sys.argv
     verbose = "-v" in sys.argv
+    if once:
+        _emit(verbose)
+        return
+    # Report only around real activity: every report bumps the session's
+    # last-active timestamp, and an idle Codex must not keep stealing the
+    # display from other agents. While the rollout advances we report
+    # (WORKING); once it stops we send ONE closing report (COMPLETE/IDLE
+    # per age) and then go silent - the daemon's own decay and ttl take
+    # it from there.
+    last_mtime = None
+    closed = False
     while True:
-        report = probe()
-        if report:
-            if verbose:
-                print(json.dumps(report, ensure_ascii=False))
-            post(report)
-        elif verbose:
-            print("no codex data found")
-        if once:
-            break
+        rollout = newest_rollout()
+        mtime = rollout.stat().st_mtime if rollout else None
+        if mtime != last_mtime:
+            last_mtime = mtime
+            closed = False
+            _emit(verbose)
+        elif not closed and mtime is not None and time.time() - mtime > ACTIVE_S:
+            _emit(verbose)
+            closed = True
         time.sleep(POLL_S)
 
 
