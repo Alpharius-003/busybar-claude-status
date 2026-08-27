@@ -84,6 +84,25 @@ Start a Claude Code session — the daemon auto-spawns on the first
 statusline refresh and the display appears. `setup_claude.py uninstall`
 reverses everything.
 
+## Display styles
+
+Two looks, one codebase — pick with `BUSYBAR_STYLE` (persist it in an
+`env.sh` next to `daemon.py`, e.g. `export BUSYBAR_STYLE=avatar`):
+
+- **`minimal`** (default) — the layout above: state word + quotas always
+  visible.
+- **`avatar`** — a pixel companion acts out the state on the right
+  (typing at a laptop while WORKING, light bulb while THINKING, coffee
+  break when DONE, X-eyes on ERROR, zzz when idle), with a vertical
+  context gauge beside it. The bottom-left slot shows the state as a
+  word and swaps to quotas once the work is done.
+
+![Avatar style](docs/img/avatar-working.png)
+![Avatar + Codex fast badge](docs/img/avatar-codex-fast.png)
+
+Styles are a runtime option, not separate branches — every release
+contains both.
+
 ## Display modes
 
 Set `BUSYBAR_RENDER_MODE` (or edit `RENDER_MODE` in `daemon.py`):
@@ -150,6 +169,7 @@ Things discovered the hard way, verified on-device:
 | `install_app.py`, `device_app/` | the future on-device JS app |
 | `screenshot.py` | grab the front display as an upscaled PNG |
 | `docs/EXTENDING.md` | reporting protocol v1, adapter guide, transport guide (incl. BLE design) |
+| `adapters/codex_status.py` | Codex CLI adapter (model/effort/speed, context %, quotas — all derived, no name tables) |
 
 ## Disclaimers
 

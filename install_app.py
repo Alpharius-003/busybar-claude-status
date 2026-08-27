@@ -142,10 +142,10 @@ def main():
     # 3. ring animations (regenerate + upload)
     sys.path.insert(0, str(HERE))
     import animgen
-    for fname, gen in animgen.ANIMS.items():
+    for fname, (gen, w, h, fps) in animgen.ANIMS.items():
         frames = gen()
-        blob = animgen.encode_anim(frames)
-        animgen.decode_check(blob, frames)
+        blob = animgen.encode_anim(frames, fps=fps, w=w, h=h)
+        animgen.decode_check(blob, frames, w=w, h=h)
         api("POST", f"/assets/upload?application_name={CANVAS_APP}&file={fname}", blob)
         print(f"upload asset {fname} ({len(blob)} bytes)")
 

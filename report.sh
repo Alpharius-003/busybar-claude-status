@@ -17,6 +17,8 @@ body=$(cat)
 # the loser of the bind exits immediately.
 if ! curl -m 0.3 -s -o /dev/null "http://127.0.0.1:$PORT/health"; then
   [ -f "$LOG" ] && [ "$(wc -c <"$LOG")" -gt 1048576 ] && : >"$LOG"
+  # Optional persistent config (BUSYBAR_STYLE / _TRANSPORT / _RENDER_MODE ...)
+  [ -f "$DIR/env.sh" ] && . "$DIR/env.sh"
   nohup /usr/bin/env python3 "$DIR/daemon.py" >>"$LOG" 2>&1 &
   disown 2>/dev/null
 fi

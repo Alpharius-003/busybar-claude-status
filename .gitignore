@@ -8,3 +8,4 @@ device-openapi.yaml
 # personal device backups
 custom_profile.backup.json
 *.backup-busybar-*
+env.sh

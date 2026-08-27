@@ -52,6 +52,10 @@ LISTEN_ADDRS = ["127.0.0.1", "10.0.4.21"]  # loopback + USB network (device side
 #             BUSY/CUSTOM theme (on-device manual switch; see claude_card.py)
 #   "off"   - data bridge only
 RENDER_MODE = os.environ.get("BUSYBAR_RENDER_MODE", "auto")
+# Display style (env BUSYBAR_STYLE): "minimal" (text state word + quotas
+# always) or "avatar" (a pixel companion acts out the state; quotas swap
+# in only when the work is done).
+STYLE = os.environ.get("BUSYBAR_STYLE", "minimal")
 APP_NAME = "claude_status"   # canvas app name; .anim assets live under it
 DRAW_PRIORITY = 50
 THEME_NAME = "claude"        # installed in /ext/apps_assets/busy/themes/
@@ -75,6 +79,23 @@ STATE_WORDS = {
     "THINKING": "THINK", "WORKING": "WORK", "WAIT": "WAIT",
     "ERROR": "ERR", "FAIL": "FAIL", "FAILED": "FAIL", "COMPLETE": "DONE",
     "IDLE": "IDLE",
+}
+STATE_WORDS_FULL = {
+    "THINKING": "thinking", "WORKING": "working", "WAIT": "waiting",
+    "ERROR": "error", "FAILED": "failed", "COMPLETE": "done", "IDLE": "idle",
+}
+AVATAR_ANIMS = {
+    "THINKING": "claw_think.anim", "WORKING": "claw_work.anim",
+    "WAIT": "claw_wait.anim", "ERROR": "claw_error.anim",
+    "FAILED": "claw_error.anim", "COMPLETE": "claw_done.anim",
+    "IDLE": "claw_idle.anim",
+}
+AVATAR_X, AVATAR_Y = 55, 1
+
+# Badge glyphs drawn after the label (protocol field "badges").
+# Rows of (x_offset, width) pixel runs; 4x7 lightning bolt for "fast".
+BADGE_GLYPHS = {
+    "fast": ("#FFD21EFF", [(2, 2), (1, 2), (0, 4), (2, 2), (1, 2), (0, 2), (0, 1)]),
 }
 STATE_COLORS = {
     "THINKING": "#AF87FFFF", "WORKING": "#FFB000FF", "WAIT": "#FF6A00FF",
@@ -186,12 +207,14 @@ class Store:
                 s = self.sessions.setdefault(key, {
                     "source": source, "state": "IDLE", "state_ts": 0.0,
                     "last_active": 0.0, "label": None, "label_color": None,
-                    "context_pct": None, "quotas": None, "ttl_s": DEFAULT_TTL_S,
+                    "context_pct": None, "quotas": None, "badges": None,
+                    "ttl_s": DEFAULT_TTL_S,
                 })
                 if "state" in fields:
                     s["state"] = fields["state"]
                     s["state_ts"] = now
-                for k in ("label", "label_color", "context_pct", "quotas", "ttl_s"):
+                for k in ("label", "label_color", "context_pct", "quotas",
+                          "badges", "ttl_s"):
                     if k in fields:
                         s[k] = fields[k]
                 s["last_active"] = now
@@ -240,6 +263,7 @@ def status_snapshot() -> dict:
         "label_color": sess.get("label_color"),
         "context_pct": sess.get("context_pct"),
         "quotas": quotas or None,
+        "badges": sess.get("badges"),
         "age_s": round(now - sess["last_active"], 1),
     }
 
@@ -355,34 +379,77 @@ def anim_element(state: str) -> dict:
             "loop": True, "timeout": ANIM_TIMEOUT_S}
 
 
+def avatar_element(state: str) -> dict:
+    return {"id": "avatar", "type": "animation", "display": "front",
+            "x": AVATAR_X, "y": AVATAR_Y,
+            "path": AVATAR_ANIMS.get(state, "claw_idle.anim"),
+            "loop": True, "timeout": ANIM_TIMEOUT_S}
+
+
+def badge_elements(badges, x: int) -> list[dict]:
+    """Known badge glyphs as pixel-run rectangles right of the label."""
+    elements = []
+    for badge in badges or []:
+        glyph = BADGE_GLYPHS.get(badge)
+        if not glyph:
+            continue  # unknown badge names are ignored (forward compat)
+        color, rows = glyph
+        for j, (dx, w) in enumerate(rows):
+            elements.append(_rect(f"bdg_{badge}{j}", x + dx, 2 + j, w, 1, color))
+        x += 4 + max(dx + w for dx, w in rows)
+    return elements
+
+
 def info_elements(status: dict) -> list[dict]:
-    """Text rows + context bar for a normalized snapshot (ring is separate)."""
+    """Text rows + context bar for a normalized snapshot (ring/avatar are
+    separate animation elements)."""
+    avatar = STYLE == "avatar"
+    label_max = (AVATAR_X - 4 - 5) if avatar else LABEL_MAX_PX
     elements = []
     state = status["state"]
 
     label = status.get("label") or ""
     label = "".join(ch for ch in label if 0x20 <= ord(ch) <= 0x7E)  # ASCII-only font
-    while label and est_width(label) > LABEL_MAX_PX:
+    while label and est_width(label) > label_max:
         label = label[:-1]
     if label:
         elements.append(_text("model", 3, 0, "top_left", label,
                               _norm_color(status.get("label_color"), LABEL_FALLBACK_COLOR)))
+    elements += badge_elements(status.get("badges"), 3 + est_width(label) + 3)
 
     used = status.get("context_pct")
-    elements.append(_rect("ctrack", BAR_X, BAR_Y, BAR_W, BAR_H, BAR_TRACK_COLOR))
-    if isinstance(used, (int, float)) and used > 0:
-        fill = max(1, min(BAR_W, round(BAR_W * min(used, 100) / 100)))
-        elements.append(_rect("cfill", BAR_X, BAR_Y, fill, BAR_H, bar_color(used)))
+    if avatar:
+        # vertical context gauge between the text column and the avatar
+        elements.append(_rect("ctrack", AVATAR_X - 4, 1, 2, 14, BAR_TRACK_COLOR))
+        if isinstance(used, (int, float)) and used > 0:
+            fh = max(1, min(14, round(14 * min(used, 100) / 100)))
+            elements.append(_rect("cfill", AVATAR_X - 4, 15 - fh, 2, fh, bar_color(used)))
+    else:
+        elements.append(_rect("ctrack", BAR_X, BAR_Y, BAR_W, BAR_H, BAR_TRACK_COLOR))
+        if isinstance(used, (int, float)) and used > 0:
+            fill = max(1, min(BAR_W, round(BAR_W * min(used, 100) / 100)))
+            elements.append(_rect("cfill", BAR_X, BAR_Y, fill, BAR_H, bar_color(used)))
 
     quotas = [q for q in (status.get("quotas") or []) if q.get("left_pct") is not None][:2]
-    if quotas:
-        text = " ".join(f"{q['name']}{q['left_pct']}%" for q in quotas)
-        worst = min(q["left_pct"] for q in quotas)
-        elements.append(_text("usage", 3, 15, "bottom_left", text, quota_color(worst)))
-
-    elements.append(_text("state", 69, 15, "bottom_right",
-                          STATE_WORDS.get(state, state[:5]),
-                          STATE_COLORS.get(state, STATE_COLORS["IDLE"])))
+    if avatar:
+        # The companion acts out the state; the bottom-left slot shows the
+        # state as a word, and swaps to quotas once the work is done.
+        if state in ("COMPLETE", "IDLE") and quotas:
+            text = " ".join(f"{q['name']}{q['left_pct']}%" for q in quotas)
+            worst = min(q["left_pct"] for q in quotas)
+            elements.append(_text("usage", 3, 15, "bottom_left", text, quota_color(worst)))
+        else:
+            elements.append(_text("usage", 3, 15, "bottom_left",
+                                  STATE_WORDS_FULL.get(state, state.lower()),
+                                  STATE_COLORS.get(state, STATE_COLORS["IDLE"])))
+    else:
+        if quotas:
+            text = " ".join(f"{q['name']}{q['left_pct']}%" for q in quotas)
+            worst = min(q["left_pct"] for q in quotas)
+            elements.append(_text("usage", 3, 15, "bottom_left", text, quota_color(worst)))
+        elements.append(_text("state", 69, 15, "bottom_right",
+                              STATE_WORDS.get(state, state[:5]),
+                              STATE_COLORS.get(state, STATE_COLORS["IDLE"])))
     return elements
 
 
@@ -433,8 +500,11 @@ def render_loop(transport: HttpTransport, stop: threading.Event):
             status = status_snapshot()
             anim = anim_element(status["state"])
             if anim["path"] != last_anim or now - last_anim_ts > ANIM_REFRESH_S:
+                anims = [anim]
+                if STYLE == "avatar":
+                    anims.append(avatar_element(status["state"]))
                 if transport.draw({"application_name": APP_NAME,
-                                   "priority": DRAW_PRIORITY, "elements": [anim]}):
+                                   "priority": DRAW_PRIORITY, "elements": anims}):
                     last_anim, last_anim_ts, drawn = anim["path"], now, True
             texts = info_elements(status)
             encoded = json.dumps(texts, sort_keys=True)
@@ -514,6 +584,9 @@ class Handler(BaseHTTPRequestHandler):
                      "resets_at": q.get("resets_at")}
                     for q in qs[:4] if isinstance(q, dict) and q.get("left_pct") is not None
                 ] or None
+            if "badges" in data:
+                bs = data["badges"] or []
+                fields["badges"] = [str(b)[:12] for b in bs[:4]] or None
             if "ttl_s" in data and data["ttl_s"]:
                 fields["ttl_s"] = max(10.0, float(data["ttl_s"]))
             STORE.report(source, session_id, fields)
@@ -589,7 +662,7 @@ def main():
     if RENDER_MODE == "theme":
         threading.Thread(target=snapshot_watch_loop, args=(transport, stop), daemon=True).start()
     log(f"listening on :{LISTEN_PORT}, render_mode={RENDER_MODE}, "
-        f"transport={os.environ.get('BUSYBAR_TRANSPORT', 'usb')}")
+        f"style={STYLE}, transport={os.environ.get('BUSYBAR_TRANSPORT', 'usb')}")
 
     while not stop.is_set():
         stop.wait(timeout=3600)

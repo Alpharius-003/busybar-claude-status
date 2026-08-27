@@ -189,7 +189,8 @@ def rle_decompress(data: bytes, blk: int) -> bytes:
     return bytes(out)
 
 
-def encode_anim(display_frames: list[bytes], fps: int = FPS) -> bytes:
+def encode_anim(display_frames: list[bytes], fps: int = FPS,
+                w: int = W, h: int = H) -> bytes:
     """Encode BGRA8888 display frames into a .anim blob (one 'default' section)."""
     # Interframe RLE: collapse identical consecutive display frames.
     file_frames: list[tuple[bytes, int]] = []
@@ -224,7 +225,7 @@ def encode_anim(display_frames: list[bytes], fps: int = FPS) -> bytes:
         "<8sBBBBBHxIIIII",
         b"bicycle0",
         0,                       # flags
-        W, H,
+        w, h,
         2,                       # AnimFileColorFormatBgra8888
         fps,
         max_len,
@@ -238,11 +239,12 @@ def encode_anim(display_frames: list[bytes], fps: int = FPS) -> bytes:
     return bytes(header + section + frames_blob)
 
 
-def decode_check(blob: bytes, display_frames: list[bytes]):
+def decode_check(blob: bytes, display_frames: list[bytes],
+                 w: int = W, h: int = H):
     """Round-trip sanity check of our own encoding."""
-    sig, flags, w, h, fmt, fps, max_len, s_len, f_len, s_cnt, ff_cnt, df_cnt = \
+    sig, flags, fw, fh, fmt, fps, max_len, s_len, f_len, s_cnt, ff_cnt, df_cnt = \
         struct.unpack("<8sBBBBBHxIIIII", blob[:36])
-    assert sig == b"bicycle0" and (w, h, fmt) == (W, H, 2) and df_cnt == len(display_frames)
+    assert sig == b"bicycle0" and (fw, fh, fmt) == (w, h, 2) and df_cnt == len(display_frames)
     off = 36 + s_len
     out = []
     for _ in range(ff_cnt):
@@ -251,18 +253,252 @@ def decode_check(blob: bytes, display_frames: list[bytes]):
         data = blob[off:off + ln]
         off += ln
         raw = rle_decompress(data, 4) if enc == 1 else data
-        assert len(raw) == W * H * 4
+        assert len(raw) == w * h * 4
         out.extend([raw] * dur)
     assert out == display_frames, "roundtrip mismatch"
 
 
+# --------------------------------------------------------------------------
+# Avatar animations ("avatar" display style): a little pixel companion,
+# 14x14, drawn from character grids. Body color = the CLI's clawd_body.
+# --------------------------------------------------------------------------
+
+AVATAR_W = AVATAR_H = 14
+AVATAR_FPS = 5
+
+_AVATAR_PALETTE = {
+    "B": (215, 119, 87), "b": (176, 92, 66), "D": (26, 16, 12),
+    "Y": (255, 210, 30), "y": (140, 110, 20), "W": (232, 232, 232),
+    "G": (110, 116, 130), "S": (207, 227, 255), "s": (120, 140, 170),
+}
+
+
+def _grid_frame(grid: str) -> bytes:
+    rows = [r.ljust(AVATAR_W, ".") for r in grid.strip("\n").split("\n")]
+    assert len(rows) == AVATAR_H, len(rows)
+    buf = bytearray(AVATAR_W * AVATAR_H * 4)
+    for y, row in enumerate(rows):
+        for x in range(AVATAR_W):
+            c = _AVATAR_PALETTE.get(row[x])
+            if c:
+                r, g, b = c
+                i = (y * AVATAR_W + x) * 4
+                buf[i:i + 4] = bytes((b, g, r, 255))
+    return bytes(buf)
+
+
+_AV_WORK_A = """
+..............
+..............
+..............
+.BBBBBBBBBBB..
+BBBBBBBBBBBBB.
+BBBDDBBBDDBBB.
+BBBDDBBBDDBBB.
+BBBBBBBBBBBBB.
+.sSSSSSSSSSs..
+.GGGGGGGGGGG..
+GGGGGGGGGGGGG.
+..............
+..............
+..............
+"""
+_AV_WORK_B = """
+..............
+..............
+..............
+..............
+.BBBBBBBBBBB..
+BBBDDBBBDDBBB.
+BBBDDBBBDDBBB.
+BBBBBBBBBBBBB.
+.sSWSSSWSSSs..
+.GGGGGGGGGGG..
+GGGGGGGGGGGGG.
+..............
+..............
+..............
+"""
+_AV_THINK_A = """
+......YY......
+.....YYYY.....
+......YY......
+..............
+.BBBBBBBBBBB..
+BBBBBBBBBBBBB.
+BBBDDBBBDDBBB.
+BBBDDBBBDDBBB.
+BBBBBBBBBBBBB.
+BBBBBBBBBBBBB.
+.BBBBBBBBBBB..
+..BB..BB..BB..
+..............
+..............
+"""
+_AV_THINK_B = """
+......yy......
+.....y..y.....
+......yy......
+..............
+.BBBBBBBBBBB..
+BBBBBBBBBBBBB.
+BBBDDBBBDDBBB.
+BBBDDBBBDDBBB.
+BBBBBBBBBBBBB.
+BBBBBBBBBBBBB.
+.BBBBBBBBBBB..
+..BB..BB..BB..
+..............
+..............
+"""
+_AV_DONE_A = """
+..............
+..........W...
+..............
+..............
+.BBBBBBBBB....
+BBBBBBBBBB.WW.
+BBBDDBBDDB.WW.
+BBB..BB..B.WW.
+BBBBBBBBBB.W..
+BBBBBBBBBB....
+.BBBBBBBBB....
+..BB..BB......
+..............
+..............
+"""
+_AV_DONE_B = """
+..............
+...........W..
+..............
+..............
+.BBBBBBBBB....
+BBBBBBBBBB.WW.
+BBBDDBBDDB.WW.
+BBB..BB..B.WW.
+BBBBBBBBBB.W..
+BBBBBBBBBB....
+.BBBBBBBBB....
+..BB..BB......
+..............
+..............
+"""
+_AV_WAIT_A = """
+......WW......
+......WW......
+......WW......
+..............
+......WW......
+.BBBBBBBBBBB..
+BBBBBBBBBBBBB.
+BBBDDBBBDDBBB.
+BBBDDBBBDDBBB.
+BBBBBBBBBBBBB.
+.BBBBBBBBBBB..
+..BB..BB..BB..
+..............
+..............
+"""
+_AV_WAIT_B = """
+..............
+......WW......
+......WW......
+......WW......
+..............
+......WW......
+.BBBBBBBBBBB..
+BBBBBBBBBBBBB.
+BBBDDBBBDDBBB.
+BBBDDBBBDDBBB.
+BBBBBBBBBBBBB.
+.BBBBBBBBBBB..
+..BB..BB..BB..
+..............
+"""
+_AV_ERROR_A = """
+..............
+..............
+..............
+..............
+.BBBBBBBBBBB..
+BBBBBBBBBBBBB.
+BBDBDBBBBDBDB.
+BBBDBBBBBBDBB.
+BBDBDBBBBDBDB.
+BBBBBBBBBBBBB.
+.BBBBBBBBBBB..
+..BB..BB..BB..
+..............
+..............
+"""
+_AV_ERROR_B = """
+..............
+..............
+..............
+..............
+..BBBBBBBBBBB.
+.BBBBBBBBBBBBB
+.BBDBDBBBBDBDB
+.BBBDBBBBBBDBB
+.BBDBDBBBBDBDB
+.BBBBBBBBBBBBB
+..BBBBBBBBBBB.
+...BB..BB..BB.
+..............
+..............
+"""
+_AV_IDLE_A = """
+..............
+..........WW..
+..............
+.......W......
+.BBBBBBBBBBB..
+BBBBBBBBBBBBB.
+BBBDDDBBDDDBB.
+BBBBBBBBBBBBB.
+BBBBBBBBBBBBB.
+BBBBBBBBBBBBB.
+.BBBBBBBBBBB..
+..BB..BB..BB..
+..............
+..............
+"""
+_AV_IDLE_B = """
+..............
+..............
+.........WW...
+..............
+.BBBBBBBBBBB..
+BBBBBBBBBBBBB.
+BBBDDDBBDDDBB.
+BBBBBBBBBBBBB.
+BBBBBBBBBBBBB.
+BBBBBBBBBBBBB.
+.BBBBBBBBBBB..
+..BB..BB..BB..
+..............
+..............
+"""
+
+
+def _avatar(*grids):
+    return [_grid_frame(g) for g in grids]
+
+
+# filename -> (frame generator, width, height, fps)
 ANIMS = {
-    "work.anim": anim_working,
-    "think.anim": anim_thinking,
-    "done.anim": anim_complete,
-    "wait.anim": anim_wait,
-    "error.anim": anim_error,
-    "idle.anim": anim_idle,
+    "work.anim": (anim_working, W, H, FPS),
+    "think.anim": (anim_thinking, W, H, FPS),
+    "done.anim": (anim_complete, W, H, FPS),
+    "wait.anim": (anim_wait, W, H, FPS),
+    "error.anim": (anim_error, W, H, FPS),
+    "idle.anim": (anim_idle, W, H, FPS),
+    "claw_work.anim": (lambda: _avatar(_AV_WORK_A, _AV_WORK_B), AVATAR_W, AVATAR_H, AVATAR_FPS),
+    "claw_think.anim": (lambda: _avatar(_AV_THINK_A, _AV_THINK_B), AVATAR_W, AVATAR_H, 3),
+    "claw_done.anim": (lambda: _avatar(_AV_DONE_A, _AV_DONE_B), AVATAR_W, AVATAR_H, 3),
+    "claw_wait.anim": (lambda: _avatar(_AV_WAIT_A, _AV_WAIT_B), AVATAR_W, AVATAR_H, AVATAR_FPS),
+    "claw_error.anim": (lambda: _avatar(_AV_ERROR_A, _AV_ERROR_B), AVATAR_W, AVATAR_H, 6),
+    "claw_idle.anim": (lambda: _avatar(_AV_IDLE_A, _AV_IDLE_B), AVATAR_W, AVATAR_H, 2),
 }
 
 
@@ -270,10 +506,10 @@ def main():
     import pathlib
     out = pathlib.Path(sys.argv[1] if len(sys.argv) > 1 else ".")
     out.mkdir(parents=True, exist_ok=True)
-    for fname, gen in ANIMS.items():
+    for fname, (gen, w, h, fps) in ANIMS.items():
         frames = gen()
-        blob = encode_anim(frames)
-        decode_check(blob, frames)
+        blob = encode_anim(frames, fps=fps, w=w, h=h)
+        decode_check(blob, frames, w=w, h=h)
         (out / fname).write_bytes(blob)
         print(f"{fname}: {len(frames)} frames, {len(blob)} bytes")
 

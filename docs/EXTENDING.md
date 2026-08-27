@@ -40,6 +40,7 @@ curl -X POST http://127.0.0.1:8765/v1/report -H 'Content-Type: application/json'
 | `label_color` | `#RRGGBB[AA]` | no | line-1 color (default white) |
 | `context_pct` | 0–100 | no | fills the progress bar (green→yellow→orange→red) |
 | `quotas` | array | no | up to 2 rendered as `name+left%` (e.g. `5h85% 7d97%`); each `{name ≤6, left_pct 0-100, resets_at?: unix_s}` — after `resets_at` passes, shown as 100% left |
+| `badges` | array of names | no | small glyphs after the label; known: `fast` (lightning bolt). Unknown names are ignored, so reporting a badge is always safe |
 | `ttl_s` | seconds | no | session forgotten after this silence (default 6h) |
 | `ended` | bool | no | `true` removes the session immediately |
 
@@ -66,9 +67,17 @@ An adapter is just "run curl at the right moments":
   the normalized schema (`claude_statusline_report()` in `daemon.py`).
   Claude's specialness — effort→color from the CLI's own palette, the
   model-follows-plan 5h/7d windows — is entirely inside that function.
-- **Codex CLI**: point its `notify` hook at a script that posts
-  lifecycle states; token/context data can be scraped from its session
-  logs where available. Minimal viable adapter is states only.
+- **Codex CLI**: shipped — `adapters/codex_status.py`. Zero-config: it
+  reads `~/.codex/config.toml` and the newest session rollout, deriving
+  everything generically so model renames never break it: the label is
+  prettified from the raw id (`gpt-5.6-sol` → `5.6 Sol` + effort),
+  `service_tier` ≠ default becomes a badge (`fast` → lightning),
+  context % comes from `last_token_usage / model_context_window`, and
+  quotas from Codex's own `rate_limits` (names derived from
+  `window_minutes`: 10080 → `7d`). Run it alongside the daemon:
+  `python3 adapters/codex_status.py`. (Codex's `notify` hook can also
+  drive states push-style, but the file-activity probe needs no config
+  changes at all.)
 - **Cursor**: use Cursor Hooks (`hooks.json`, e.g. `beforeShellExecution`
   / `stop`) to post `WORKING` / `COMPLETE` with
   `label: "Cursor"`, or wrap `cursor-agent` invocations.
