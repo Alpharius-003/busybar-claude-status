@@ -75,9 +75,15 @@ An adapter is just "run curl at the right moments":
   context % comes from `last_token_usage / model_context_window`, and
   quotas from Codex's own `rate_limits` (names derived from
   `window_minutes`: 10080 → `7d`). Run it alongside the daemon:
-  `python3 adapters/codex_status.py`. (Codex's `notify` hook can also
-  drive states push-style, but the file-activity probe needs no config
-  changes at all.)
+  `python3 adapters/codex_status.py` — or better, make it
+  **auto-start**: `python3 adapters/install_codex_autostart.py install`
+  wires Codex's `notify` hook to `adapters/codex_notify.sh`, which
+  chains your previous notifier (preserved verbatim), keeps the daemon +
+  adapter alive on every Codex turn, and pushes the turn's end state
+  instantly. `uninstall` restores everything. (Codex *skills* are
+  model-invoked instruction packages and *plugins* are connector
+  manifests — neither can run a background service, so the notify hook
+  is the native auto-start point.)
 - **Cursor**: use Cursor Hooks (`hooks.json`, e.g. `beforeShellExecution`
   / `stop`) to post `WORKING` / `COMPLETE` with
   `label: "Cursor"`, or wrap `cursor-agent` invocations.

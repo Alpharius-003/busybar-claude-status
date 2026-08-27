@@ -185,7 +185,8 @@ Things discovered the hard way, verified on-device:
 | `install_app.py`, `device_app/` | the future on-device JS app |
 | `screenshot.py` | grab the front display as an upscaled PNG |
 | `docs/EXTENDING.md` | reporting protocol v1, adapter guide, transport guide (incl. BLE design) |
-| `adapters/codex_status.py` | Codex CLI adapter (model/effort/speed, context %, quotas — all derived, no name tables) |
+| `adapters/codex_status.py` | Codex adapter (model/effort/speed, context %, quotas — all derived, no name tables) |
+| `adapters/install_codex_autostart.py` | hook the adapter into Codex's `notify` so it auto-starts on use |
 | `install_theme.py` | install the on-device "claude" theme (ring + typing companion) |
 
 ## Disclaimers

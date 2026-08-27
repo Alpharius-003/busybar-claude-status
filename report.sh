@@ -11,7 +11,8 @@ PORT=8765
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 LOG="$HOME/.claude/busybar-daemon.log"
 
-body=$(cat)
+# "ensure" mode only guarantees the daemon is up (no stdin, no report).
+[ "$1" = "ensure" ] || body=$(cat)
 
 # Spawn the daemon if the port is not answering. A race here is harmless:
 # the loser of the bind exits immediately.
@@ -24,6 +25,8 @@ if ! curl -m 0.3 -s -o /dev/null "http://127.0.0.1:$PORT/health"; then
 fi
 
 case "$1" in
+  ensure)
+    ;;
   state)
     printf '%s' "$body" | curl -m 1 -s -o /dev/null -X POST \
       "http://127.0.0.1:$PORT/state?state=$2" --data-binary @- 2>/dev/null

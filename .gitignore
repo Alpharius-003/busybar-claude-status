@@ -9,3 +9,4 @@ device-openapi.yaml
 custom_profile.backup.json
 *.backup-busybar-*
 env.sh
+adapters/codex_notify_chain.sh
