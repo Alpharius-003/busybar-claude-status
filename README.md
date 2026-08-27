@@ -7,7 +7,13 @@ the 72×16 front LED matrix with buttery-smooth native animations.
 
 [中文文档 / Chinese docs](README.zh-CN.md)
 
-![Working state](docs/img/working.png)
+**Avatar style** — a faithful pixel Clawd acts out the session state:
+
+![Avatar style](docs/img/avatar-working.png)
+
+**Minimal style** — everything visible at once:
+
+![Minimal style](docs/img/working.png)
 
 ```
 ############################    1px per-pixel animated ring (.anim, 25 fps)
@@ -91,13 +97,15 @@ Two looks, one codebase — pick with `BUSYBAR_STYLE` (persist it in an
 
 - **`minimal`** (default) — the layout above: state word + quotas always
   visible.
-- **`avatar`** — a pixel companion acts out the state on the right
-  (typing at a laptop while WORKING, light bulb while THINKING, coffee
-  break when DONE, X-eyes on ERROR, zzz when idle), with a vertical
-  context gauge beside it. The bottom-left slot shows the state as a
-  word and swaps to quotas once the work is done.
+- **`avatar`** — a pixel companion (a 1:1 recreation of the Claude Code
+  terminal mascot) acts out the state on the right: typing at a laptop
+  while WORKING (with blinks), light bulb while THINKING, coffee break
+  when DONE, X-eyes on ERROR, zzz when idle — plus a vertical context
+  gauge. The bottom-left slot shows the state as a word and swaps to
+  quotas once the work is done.
 
-![Avatar style](docs/img/avatar-working.png)
+A Codex session in avatar style, with the `fast` badge:
+
 ![Avatar + Codex fast badge](docs/img/avatar-codex-fast.png)
 
 Styles are a runtime option, not separate branches — every release
@@ -115,7 +123,10 @@ Set `BUSYBAR_RENDER_MODE` (or edit `RENDER_MODE` in `daemon.py`):
   **"claude" is the currently selected BUSY/CUSTOM theme**. Install the
   theme with `python3 install_theme.py` — a breathing claude-orange ring
   with the companion typing in the middle; it appears in the device's
-  theme picker (also the screen during a claude-theme focus session).
+  theme picker (also the screen during a claude-theme focus session):
+
+  ![Claude theme](docs/img/claude-theme.png)
+
   Picking it toggles the display on, picking another theme toggles it
   off. (In `auto` mode the theme is unrelated to the status display —
   it's just a theme.) `python3 claude_card.py install` binds the physical

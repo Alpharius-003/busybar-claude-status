@@ -8,7 +8,21 @@
 动画资产用 `python3 animgen.py anims/` 生成后经 `/api/assets/upload` 上传，
 详见英文 README 的 Install 一节）。
 
-## 显示布局
+## 双样式（BUSYBAR_STYLE，可写入 env.sh 持久化）
+
+- **`minimal`**（默认）——状态词 + 配额常驻，一屏尽览：
+
+  ![minimal](docs/img/working.png)
+
+- **`avatar`**——1:1 复刻终端 Clawd 的像素小形象在右侧演出状态（打字带
+  眨眼 / 灯泡思考 / 咖啡休息 / X 眼报错 / zzz 睡觉）+ 竖向 ctx 量条；
+  左下平时显示状态词，完工后换成配额：
+
+  ![avatar](docs/img/avatar-working.png)
+
+样式是运行时配置而非分支，每个 Release 都同时包含两种。
+
+## 显示布局（minimal）
 
 ```
 ████████████████████████████   1px 环形灯带：预渲染 .anim 由固件原生 25fps 播放
@@ -39,7 +53,7 @@ statusline-command.sh --.
                         +--> daemon.py (127.0.0.1:8765 + 10.0.4.21:8765)
 settings.json hooks ----'        |            |
                                  |            +--> GET /status（给设备端 JS 应用轮询）
-                                 +--> 直推渲染 DIRECT_PUSH=True（当前启用）
+                                 +--> 直推渲染（RENDER_MODE=auto|theme|off）
                                         anim 元素换文件 + 文本/进度条增量更新
 ```
 
@@ -64,7 +78,7 @@ settings.json hooks ----'        |            |
   （Apps 菜单手动选择，轮询 `http://10.0.4.21:8765/status` 本地渲染）。
   **已就绪但被固件卡住**：JS 应用支持在 1.2.0-rc 才加入（设备现为 1.1.1
   稳定版，稳定通道暂无更新）。固件升级后运行 `python3 install_app.py`，
-  然后把 daemon 的 `DIRECT_PUSH` 改为 `False`。
+  然后把渲染模式设为 `BUSYBAR_RENDER_MODE=off`。
 - **report.sh / screenshot.py** — 上报转发（自动拉起 daemon）/ 前屏截图调试。
 - **多工具扩展**：核心与 Claude 解耦——任何工具（Codex、Cursor、CI 脚本）
   一条 curl 调 `POST /v1/report`（标准化字段：state/label/label_color/
