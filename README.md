@@ -107,13 +107,18 @@ contains both.
 
 Set `BUSYBAR_RENDER_MODE` (or edit `RENDER_MODE` in `daemon.py`):
 
-- **`auto`** (default) — display whenever Claude Code is active; released
-  after 10 min idle.
+- **`auto`** (default) — display whenever an agent is active; after 10
+  minutes of idle the screen is handed back to the device and returns on
+  the next activity (`BUSYBAR_IDLE_CLEAR_S` tunes this; `0` = keep the
+  display forever).
 - **`theme`** — manual, on the device: the display only shows while
-  **"claude" is the currently selected BUSY/CUSTOM theme**. The repo ships
-  a `claude` theme (orange breathing ring) you install into the device's
-  theme picker; picking it toggles the display on, picking another theme
-  toggles it off. `python3 claude_card.py install` binds the physical
+  **"claude" is the currently selected BUSY/CUSTOM theme**. Install the
+  theme with `python3 install_theme.py` — a breathing claude-orange ring
+  with the companion typing in the middle; it appears in the device's
+  theme picker (also the screen during a claude-theme focus session).
+  Picking it toggles the display on, picking another theme toggles it
+  off. (In `auto` mode the theme is unrelated to the status display —
+  it's just a theme.) `python3 claude_card.py install` binds the physical
   CUSTOM key to it (backs up your current card; `restore` undoes).
 - **`off`** — data bridge only (`GET /status` on `127.0.0.1:8765` and the
   USB interface for the future on-device app).
@@ -170,6 +175,7 @@ Things discovered the hard way, verified on-device:
 | `screenshot.py` | grab the front display as an upscaled PNG |
 | `docs/EXTENDING.md` | reporting protocol v1, adapter guide, transport guide (incl. BLE design) |
 | `adapters/codex_status.py` | Codex CLI adapter (model/effort/speed, context %, quotas — all derived, no name tables) |
+| `install_theme.py` | install the on-device "claude" theme (ring + typing companion) |
 
 ## Disclaimers
 

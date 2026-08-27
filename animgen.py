@@ -485,6 +485,33 @@ def _avatar(*grids):
     return [_grid_frame(g) for g in grids]
 
 
+def _blit(buf: bytearray, grid: str, ox: int, oy: int, canvas_w: int = W):
+    """Paint an avatar grid onto a BGRA canvas at (ox, oy)."""
+    rows = [r.ljust(AVATAR_W, ".") for r in grid.strip("\n").split("\n")]
+    for y, row in enumerate(rows):
+        for x in range(AVATAR_W):
+            c = _AVATAR_PALETTE.get(row[x])
+            if c:
+                r_, g_, b_ = c
+                i = ((oy + y) * canvas_w + ox + x) * 4
+                buf[i:i + 4] = bytes((b_, g_, r_, 255))
+
+
+CLAUDE_ORANGE = (255, 153, 51)
+
+
+def anim_claude_theme(n=80):
+    """The on-device "claude" BUSY/CUSTOM theme background: a breathing
+    claude-orange ring with the companion typing away in the middle."""
+    frames = []
+    for f in range(n):
+        v = 0.25 + 0.75 * (0.5 - 0.5 * math.cos(2 * math.pi * f / n))
+        buf = bytearray(render_frame(lambda p, v=v: scale(CLAUDE_ORANGE, v)))
+        _blit(buf, _AV_WORK_A if (f // 8) % 2 == 0 else _AV_WORK_B, 29, 1)
+        frames.append(bytes(buf))
+    return frames
+
+
 # filename -> (frame generator, width, height, fps)
 ANIMS = {
     "work.anim": (anim_working, W, H, FPS),

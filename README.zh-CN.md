@@ -53,9 +53,10 @@ settings.json hooks ----'        |            |
     canvas 被完全屏蔽（优先级 100 也被拒），显示会暂停、会话结束后恢复；
   - `off` — 仅做数据桥（供未来 ≥1.2.0 的设备端 JS 应用轮询 /status）。
   渲染开销极小：状态变化才换 .anim、文本变化才重发。
-- **claude 主题** — 已安装到设备 `/ext/apps_assets/busy/themes/claude/`
-  （claude 橙 4s 呼吸环 + theme.json），在设备主题选择器里可见可选，
-  也是 `theme` 模式的开关载体；会话运行时它就是屏幕上的兜底画面。
+- **claude 主题** — `python3 install_theme.py` 安装：claude 橙呼吸环 +
+  居中打字的小形象，在设备主题选择器里可见可选，也是 `theme` 模式的开关
+  载体；专注会话运行时它就是屏幕画面。注意 `auto` 模式下主题与状态屏无关。
+  空闲 10 分钟清屏可用 `BUSYBAR_IDLE_CLEAR_S` 调整（0=永不清屏）。
 - **animgen.py** — 固件自研 `bicycle0` 动画格式（`.anim`）的 Python 编码器
   （BGRA8888 + RLE + 帧间合并 + default section），生成六个状态环动画并本地
   解码回环校验。资产已传至设备 `/ext/apps_assets/claude_status/`。

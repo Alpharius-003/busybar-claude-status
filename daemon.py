@@ -66,7 +66,9 @@ ANIM_TIMEOUT_S = 120
 ANIM_REFRESH_S = 60.0
 KEEPALIVE_S = 8.0
 COMPLETE_HOLD_S = 30.0
-IDLE_CLEAR_AFTER_S = 600.0
+# Idle release: after this many seconds of IDLE the screen is handed
+# back to the device (env BUSYBAR_IDLE_CLEAR_S; 0 = keep forever).
+IDLE_CLEAR_AFTER_S = float(os.environ.get("BUSYBAR_IDLE_CLEAR_S", "600"))
 DEFAULT_TTL_S = 6 * 3600
 
 STATES = ("THINKING", "WORKING", "WAIT", "ERROR", "FAILED", "COMPLETE", "IDLE")
@@ -486,7 +488,8 @@ def render_loop(transport: HttpTransport, stop: threading.Event):
         want = False
         if sess is not None:
             idle_expired = (
-                effective_state(sess) == "IDLE"
+                IDLE_CLEAR_AFTER_S > 0
+                and effective_state(sess) == "IDLE"
                 and now - max(sess["state_ts"], sess["last_active"]) > IDLE_CLEAR_AFTER_S
             )
             gate_ok = THEME_ACTIVE.is_set() if RENDER_MODE == "theme" else True
