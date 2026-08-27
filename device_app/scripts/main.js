@@ -39,12 +39,6 @@ var STATE_COLORS = {
     ERROR: "#FF2020FF", FAILED: "#FF2020FF", COMPLETE: "#20C040FF",
     IDLE: "#808080FF", OFFLINE: "#666666FF"
 };
-/* Claude Code theme palette: inactive/permission/warning/fastMode/effortUltra */
-var EFFORT_COLORS = {
-    low: "#999999FF", medium: "#99CCFFFF", high: "#FFC107FF",
-    xhigh: "#FF7814FF", max: "#AF87FFFF"
-};
-
 var BAR_X = 50, BAR_Y = 3, BAR_W = 20, BAR_H = 4;
 var MODEL_MAX_PX = BAR_X - 2 - 3;
 
@@ -105,41 +99,37 @@ function rectEl(id, x, y, w, h, color) {
 }
 
 function infoElements(st) {
+    /* Consumes the daemon's normalized /status shape:
+       {state, label, label_color, context_pct, quotas:[{name,left_pct}]} */
     var els = [];
     var state = st.state || "OFFLINE";
 
-    var name = st.model || "";
-    var effort = st.effort || "";
-    var label = (name + " " + effort).replace(/^\s+|\s+$/g, "");
+    var label = st.label || "";
     while (label.length > 3 && estWidth(label) > MODEL_MAX_PX) {
-        name = name.substring(0, name.length - 1);
-        label = (name + " " + effort).replace(/^\s+|\s+$/g, "");
+        label = label.substring(0, label.length - 1);
     }
     if (label) {
-        var mcolor = EFFORT_COLORS[effort] || "#FFFFFFFF";
-        els.push(textEl("model", 3, 0, "top_left", label, mcolor));
+        els.push(textEl("model", 3, 0, "top_left", label,
+                        st.label_color || "#FFFFFFFF"));
     }
 
     els.push(rectEl("ctrack", BAR_X, BAR_Y, BAR_W, BAR_H, "#262626FF"));
-    if (typeof st.ctx_used === "number" && st.ctx_used > 0) {
-        var fill = Math.round(BAR_W * st.ctx_used / 100);
+    if (typeof st.context_pct === "number" && st.context_pct > 0) {
+        var fill = Math.round(BAR_W * st.context_pct / 100);
         if (fill < 1) fill = 1;
         if (fill > BAR_W) fill = BAR_W;
-        els.push(rectEl("cfill", BAR_X, BAR_Y, fill, BAR_H, ctxColor(st.ctx_used)));
+        els.push(rectEl("cfill", BAR_X, BAR_Y, fill, BAR_H, ctxColor(st.context_pct)));
     }
 
-    var usage = null, worst = 100;
-    if (typeof st.five_left === "number" && typeof st.week_left === "number") {
-        usage = "5h" + st.five_left + "% 7d" + st.week_left + "%";
-        worst = Math.min(st.five_left, st.week_left);
-    } else if (typeof st.five_left === "number") {
-        usage = "5h" + st.five_left + "%";
-        worst = st.five_left;
-    } else if (typeof st.week_left === "number") {
-        usage = "7d" + st.week_left + "%";
-        worst = st.week_left;
+    var quotas = st.quotas || [];
+    if (quotas.length) {
+        var parts = [], worst = 100;
+        for (var i = 0; i < quotas.length && i < 2; i++) {
+            parts.push(quotas[i].name + quotas[i].left_pct + "%");
+            if (quotas[i].left_pct < worst) worst = quotas[i].left_pct;
+        }
+        els.push(textEl("usage", 3, 15, "bottom_left", parts.join(" "), planColor(worst)));
     }
-    if (usage) els.push(textEl("usage", 3, 15, "bottom_left", usage, planColor(worst)));
 
     els.push(textEl("state", 69, 15, "bottom_right",
                     STATE_WORDS[state] || state, STATE_COLORS[state] || "#808080FF"));

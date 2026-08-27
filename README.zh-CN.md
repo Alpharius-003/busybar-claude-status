@@ -65,6 +65,11 @@ settings.json hooks ----'        |            |
   稳定版，稳定通道暂无更新）。固件升级后运行 `python3 install_app.py`，
   然后把 daemon 的 `DIRECT_PUSH` 改为 `False`。
 - **report.sh / screenshot.py** — 上报转发（自动拉起 daemon）/ 前屏截图调试。
+- **多工具扩展**：核心与 Claude 解耦——任何工具（Codex、Cursor、CI 脚本）
+  一条 curl 调 `POST /v1/report`（标准化字段：state/label/label_color/
+  context_pct/quotas）即可接管显示；Claude 的 effort 配色与 5h/7d 语义
+  全部在内置适配器里。传输层 `BUSYBAR_TRANSPORT=usb|wifi|cloud` 可切换，
+  BLE 方案已完成设计。详见 [docs/EXTENDING.md](docs/EXTENDING.md)。
 
 ## 常用操作
 

@@ -50,6 +50,13 @@ settings.json hooks -'      |  session store               /api/display/draw
   traffic.
 - Everything is Python 3 stdlib. No dependencies.
 
+**Not just Claude:** the daemon core is provider-agnostic. Codex, Cursor,
+CI jobs — anything that can run one curl — can drive the display through
+`POST /v1/report`. Claude-specific semantics (effort colors, 5h/7d plan
+windows) live in a built-in adapter. Wi-Fi and cloud transports are
+selectable via `BUSYBAR_TRANSPORT`; a BLE transport is designed. See
+**[docs/EXTENDING.md](docs/EXTENDING.md)**.
+
 ## Install
 
 Requirements: macOS/Linux, Python 3.9+, a BUSY Bar connected over USB
@@ -142,6 +149,7 @@ Things discovered the hard way, verified on-device:
 | `claude_card.py` | bind the CUSTOM key to the claude theme (and restore) |
 | `install_app.py`, `device_app/` | the future on-device JS app |
 | `screenshot.py` | grab the front display as an upscaled PNG |
+| `docs/EXTENDING.md` | reporting protocol v1, adapter guide, transport guide (incl. BLE design) |
 
 ## Disclaimers
 
