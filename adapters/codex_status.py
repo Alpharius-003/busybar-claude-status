@@ -29,7 +29,10 @@ import sys
 import time
 import urllib.request
 
-DAEMON = "http://127.0.0.1:8765/v1/report"
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
+import report  # noqa: E402  (daemon/hub address + host headers from env.sh)
+
+DAEMON = report.BASE + "/v1/report"
 CODEX_HOME = pathlib.Path.home() / ".codex"
 SESSIONS = CODEX_HOME / "sessions"
 
@@ -157,11 +160,15 @@ def probe() -> dict | None:
     }
 
 
+def report_headers() -> dict:
+    return dict(report.HEADERS)
+
+
 def post(report: dict) -> bool:
     try:
         urllib.request.urlopen(urllib.request.Request(
             DAEMON, data=json.dumps(report).encode(), method="POST",
-            headers={"Content-Type": "application/json"}), timeout=2).read()
+            headers=report_headers()), timeout=2).read()
         return True
     except OSError:
         return False

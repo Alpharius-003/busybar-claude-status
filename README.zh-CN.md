@@ -52,7 +52,7 @@ max 紫 `effortUltra`(175,135,255)。
 
 ```
 statusline-command.sh --.
-                        +--> daemon.py (127.0.0.1:8765 + 10.0.4.21:8765)
+                        +--> daemon.py (127.0.0.1 + 10.0.4.21 :8765；--lan 后 0.0.0.0)
 settings.json hooks ----'        |            |
                                  |            +--> GET /status（给设备端 JS 应用轮询）
                                  +--> 直推渲染（RENDER_MODE=auto|theme|off）
@@ -96,6 +96,7 @@ curl -s http://127.0.0.1:8765/health     # 各会话原始快照
 python3 screenshot.py /tmp/front.png     # 截取前屏
 python3 animgen.py anims/                # 重新生成动画
 python3 install_app.py                   # (固件>=1.2.0) 安装设备端应用
+python3 setup_claude.py install --lan    # 本机 daemon 接受局域网上报（多机共用）
 tail ~/.claude/busybar-daemon.log
 ```
 
@@ -103,6 +104,42 @@ tail ~/.claude/busybar-daemon.log
 事件上**并列追加**上报命令（不动你已有的 hooks），并让 statusline 命令
 把 JSON 转发给 daemon（已有 statusline 则原样包裹，没有则装一个极简版）；
 一切修改前自动备份，`uninstall` 完整还原。
+
+## 多台电脑共用一个 Bar（Mac + Windows 自动切换）
+
+Mac 和 Windows 各开着若干 Claude Code，一块屏幕跟着你走：插着 Bar 的那台
+把 daemon 当**枢纽**跑，其余电脑什么都不跑，hooks 和 statusline 经局域网
+转发给枢纽。
+
+```bash
+# 插着 Bar 的电脑（枢纽）
+python3 setup_claude.py install --lan
+
+# 其他每台电脑（Windows 用 py setup_claude.py ...）
+python3 setup_claude.py install --hub http://<枢纽主机名>.local:8765 --tag "#00A4EF"
+```
+
+- `--lan` 让枢纽监听 `0.0.0.0:8765`（`BUSYBAR_LISTEN`）；`--hub` 在客户端
+  写入 `BUSYBAR_HUB`，该机不起本地 daemon，`report.py` 直接 POST 到枢纽
+  （每次 hook 最多耗时 1.2 s，枢纽不可达则退避 20 s 只试一次，枢纽睡着
+  也不会拖慢 Claude Code）。两者都持久化在 `env.sh`，正在跑的枢纽 daemon
+  会被自动重启。
+- `<枢纽主机名>.local` 是枢纽的 Bonjour/mDNS 名（macOS：系统设置 → 通用 →
+  共享 → 本地主机名；Windows 10 1703+ 原生能解析 `.local`）。解析不了就
+  换成枢纽 IP，并在路由器里给它绑定 DHCP 保留地址。
+- `--tag` 标记这台电脑的会话：`#RRGGBB` 颜色 = 在模型名左侧的两列空位画
+  一面 2×5 小旗（不占字符）；一两个字母（`--tag W`）= 写在模型名后面，
+  必要时缩短模型名（`Fabl 5 max W`）。
+- `--token 密钥`（枢纽和所有客户端同值）让枢纽拒绝没带密钥的局域网上报，
+  本机回环永远免检；默认关闭（面向家庭网络）。枢纽若开了防火墙，放行
+  Python 的 TCP 8765 入站。
+- 客户端上的 Codex 同样适用：适配器直接上报到枢纽。
+
+**显示谁？** 跟着注意力走，不跟着动静走：正在干活的会话里，你最后说过
+话的那个占屏——你提交的提示词、权限询问、从空闲开始的新任务会拉走屏幕；
+工具调用和 statusline 刷新永远不会。它空闲后才轮到仍在跑的后台会话；
+全都空闲时停在你最后说话的那个。`GET /status` 带 `host` / `host_tag`，
+`GET /health` 列出每个会话的 `focus_ts`。
 
 ## 固件坑位实录（1.1.1）
 

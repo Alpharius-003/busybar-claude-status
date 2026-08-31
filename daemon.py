@@ -28,8 +28,10 @@ Layout (72x16 front display):
 
 from __future__ import annotations
 
+import hmac
 import json
 import os
+import re
 import signal
 import sys
 import threading
@@ -44,7 +46,15 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 # --------------------------------------------------------------------------
 
 LISTEN_PORT = 8765
-LISTEN_ADDRS = ["127.0.0.1", "10.0.4.21"]  # loopback + USB network (device side)
+# Bind addresses (env BUSYBAR_LISTEN, comma-separated). Default: loopback +
+# the USB network (device side) only. "0.0.0.0" turns this daemon into the
+# hub for the other computers on your LAN (README: "Several computers").
+LISTEN_ADDRS = [a.strip() for a in
+                os.environ.get("BUSYBAR_LISTEN", "127.0.0.1,10.0.4.21").split(",")
+                if a.strip()] or ["127.0.0.1"]
+# Optional shared secret for reports arriving from other machines (env
+# BUSYBAR_HUB_TOKEN on the hub and on every client). Loopback never needs it.
+HUB_TOKEN = os.environ.get("BUSYBAR_HUB_TOKEN", "")
 
 # How the daemon renders to the device (env BUSYBAR_RENDER_MODE overrides):
 #   "auto"  - whenever any reporting agent is active (the always-on behavior)
@@ -106,6 +116,10 @@ STATE_COLORS = {
 }
 
 LABEL_FALLBACK_COLOR = "#FFFFFFFF"
+HOST_TAG_COLOR = "#8C8C8CFF"   # text host tag (protocol `host_tag`)
+# States that pull the display to a session: the user just spoke to it
+# (THINKING) or it is asking for the user (WAIT).
+ATTENTION_STATES = ("THINKING", "WAIT")
 QUOTA_COLOR = "#A0A0A0FF"
 FONT = "small"
 
@@ -208,15 +222,23 @@ class Store:
             else:
                 s = self.sessions.setdefault(key, {
                     "source": source, "state": "IDLE", "state_ts": 0.0,
-                    "last_active": 0.0, "label": None, "label_color": None,
+                    "last_active": 0.0, "focus_ts": 0.0,
+                    "label": None, "label_color": None,
                     "context_pct": None, "quotas": None, "badges": None,
-                    "ttl_s": DEFAULT_TTL_S,
+                    "host": None, "host_tag": None, "ttl_s": DEFAULT_TTL_S,
                 })
                 if "state" in fields:
-                    s["state"] = fields["state"]
+                    new, prev = fields["state"], s["state"]
+                    # Attention events: the user spoke to this session, it
+                    # wants the user, or a new task just started in it.
+                    # Only these move the display between sessions.
+                    if new in ATTENTION_STATES or (
+                            new == "WORKING" and prev in ("IDLE", "COMPLETE")):
+                        s["focus_ts"] = now
+                    s["state"] = new
                     s["state_ts"] = now
                 for k in ("label", "label_color", "context_pct", "quotas",
-                          "badges", "ttl_s"):
+                          "badges", "host", "host_tag", "ttl_s"):
                     if k in fields:
                         s[k] = fields[k]
                 s["last_active"] = now
@@ -230,10 +252,15 @@ class Store:
                 del self.sessions[key]
             if not self.sessions:
                 return None
-            return dict(max(self.sessions.values(), key=lambda s: s["last_active"]))
+            # The display follows attention, not chatter: among the sessions
+            # doing something, the one the user last talked to wins; a
+            # background session surfaces only once the focused one is idle.
+            return dict(max(self.sessions.values(), key=lambda s: (
+                effective_state(s) != "IDLE", s["focus_ts"], s["last_active"])))
 
 
 STORE = Store()
+STOP = threading.Event()   # set to make the daemon exit (signals, POST /shutdown)
 
 
 def effective_state(sess: dict) -> str:
@@ -266,6 +293,8 @@ def status_snapshot() -> dict:
         "context_pct": sess.get("context_pct"),
         "quotas": quotas or None,
         "badges": sess.get("badges"),
+        "host": sess.get("host"),
+        "host_tag": sess.get("host_tag"),
         "age_s": round(now - sess["last_active"], 1),
     }
 
@@ -283,15 +312,38 @@ CLAUDE_EFFORT_COLORS = {
 }
 
 
-def claude_statusline_report(data: dict) -> dict:
+def shorten_model_label(name: str, effort: str, max_px: int) -> str:
+    """Fit "<model name> <effort>" into max_px: keep the effort word, chip
+    letters off the longest alphabetic word of the name first ("Fable 5"
+    -> "Fabl 5"), so version numbers survive as long as possible."""
+    words = name.split()
+
+    def label() -> str:
+        return f"{' '.join(words)} {effort}".strip()
+
+    while words and est_width(label()) > max_px:
+        # chip the longest alphabetic word down to 3 letters; then drop
+        # trailing words (versions, suffixes); then chip down to 1 letter
+        for floor in (3, 1):
+            alpha = [i for i, w in enumerate(words) if len(w) > floor and w[-1].isalpha()]
+            if alpha:
+                i = max(alpha, key=lambda i: len(words[i]))
+                words[i] = words[i][:-1]
+                break
+            if floor == 3 and len(words) > 1:
+                words.pop()
+                break
+        else:
+            words.pop()
+    return label()
+
+
+def claude_statusline_report(data: dict, reserve_px: int = 0) -> dict:
     model = (data.get("model") or {})
     name = model.get("display_name") or model.get("id") or ""
     effort = (data.get("effort") or {}).get("level") or ""
 
-    label = f"{name} {effort}".strip()
-    while len(label) > 3 and est_width(label) > LABEL_MAX_PX:
-        name = name[:-1]  # shorten the model name, keep the effort word
-        label = f"{name} {effort}".strip()
+    label = shorten_model_label(name, effort, LABEL_MAX_PX - reserve_px)
 
     ctx = data.get("context_window") or {}
     context_pct = ctx.get("used_percentage")
@@ -336,6 +388,19 @@ def est_width(text: str) -> int:
         else:
             w += 4
     return w
+
+
+def host_tag_kind(tag) -> tuple[str, str]:
+    """Protocol `host_tag`: "#RRGGBB[AA]" -> ("flag", color): a 2x5 flag in
+    the free columns left of the label (costs no text space); up to two
+    printable ASCII chars -> ("text", chars): drawn after the label (the
+    model name is shortened to make room); anything else -> ("", "")."""
+    if not isinstance(tag, str):
+        return "", ""
+    tag = "".join(ch for ch in tag.strip() if 0x21 <= ord(ch) <= 0x7E)
+    if re.fullmatch(r"#[0-9A-Fa-f]{6}(?:[0-9A-Fa-f]{2})?", tag):
+        return "flag", _norm_color(tag, HOST_TAG_COLOR)
+    return ("text", tag[:2]) if tag else ("", "")
 
 
 def bar_color(used: float) -> str:
@@ -410,6 +475,9 @@ def info_elements(status: dict) -> list[dict]:
     elements = []
     state = status["state"]
 
+    kind, tag = host_tag_kind(status.get("host_tag"))
+    if kind == "text":
+        label_max -= est_width(tag) + 2  # the tag sits right after the label
     label = status.get("label") or ""
     label = "".join(ch for ch in label if 0x20 <= ord(ch) <= 0x7E)  # ASCII-only font
     while label and est_width(label) > label_max:
@@ -417,7 +485,16 @@ def info_elements(status: dict) -> list[dict]:
     if label:
         elements.append(_text("model", 3, 0, "top_left", label,
                               _norm_color(status.get("label_color"), LABEL_FALLBACK_COLOR)))
-    elements += badge_elements(status.get("badges"), 3 + est_width(label) + 3)
+    x = 3 + est_width(label)
+    # Host tag (which computer this session lives on). Both variants are
+    # always sent - blank/transparent when unused - so a stale tag never
+    # outlives a switch to another session (element ids can't change type).
+    elements.append(_text("htag", x + 2, 0, "top_left",
+                          tag if kind == "text" else " ", HOST_TAG_COLOR))
+    if kind == "text":
+        x += 2 + est_width(tag)
+    elements.append(_rect("hflag", 1, 2, 2, 5, tag if kind == "flag" else "#00000000"))
+    elements += badge_elements(status.get("badges"), x + 3)
 
     used = status.get("context_pct")
     if avatar:
@@ -533,13 +610,30 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def _authorized(self) -> bool:
+        if not HUB_TOKEN or self.client_address[0] in ("127.0.0.1", "::1"):
+            return True
+        return hmac.compare_digest(self.headers.get("X-Busybar-Token", ""), HUB_TOKEN)
+
+    def _host_fields(self) -> dict:
+        """Which computer a report comes from (report.py / report.sh headers)."""
+        fields = {}
+        host = (self.headers.get("X-Busybar-Host") or "").strip()[:64]
+        if host:
+            fields["host"] = host
+        tag = (self.headers.get("X-Busybar-Host-Tag") or "").strip()[:9]
+        if tag:
+            fields["host_tag"] = tag
+        return fields
+
     def do_GET(self):
         if self.path in ("/status", "/v1/status"):
             self._reply(200, json.dumps(status_snapshot()).encode())
         elif self.path == "/health":
             with STORE.lock:
                 snapshot = {
-                    key: {k: s[k] for k in ("source", "state", "state_ts", "last_active")}
+                    key: {k: s[k] for k in ("source", "state", "state_ts",
+                                            "last_active", "focus_ts", "host", "host_tag")}
                     for key, s in STORE.sessions.items()
                 }
             self._reply(200, json.dumps(snapshot).encode())
@@ -554,6 +648,10 @@ class Handler(BaseHTTPRequestHandler):
             data = json.loads(raw) if raw else {}
         except json.JSONDecodeError:
             data = {}
+        if not self._authorized():
+            self._reply(401, b'{"error":"missing or wrong X-Busybar-Token"}')
+            return
+        host_fields = self._host_fields()
 
         if parsed.path == "/v1/report":
             # The provider-agnostic reporting endpoint. See docs/EXTENDING.md.
@@ -592,6 +690,11 @@ class Handler(BaseHTTPRequestHandler):
                 fields["badges"] = [str(b)[:12] for b in bs[:4]] or None
             if "ttl_s" in data and data["ttl_s"]:
                 fields["ttl_s"] = max(10.0, float(data["ttl_s"]))
+            fields.update(host_fields)
+            if data.get("host"):
+                fields["host"] = str(data["host"])[:64]
+            if "host_tag" in data:
+                fields["host_tag"] = str(data["host_tag"] or "")[:9] or None
             STORE.report(source, session_id, fields)
             self._reply(200, b'{"ok":true}')
 
@@ -602,13 +705,25 @@ class Handler(BaseHTTPRequestHandler):
             if state == "ENDED":
                 STORE.report("claude-code", sid, {"ended": True})
             elif state in STATES:
-                STORE.report("claude-code", sid, {"state": state})
+                STORE.report("claude-code", sid, {"state": state, **host_fields})
             self._reply(200)
+
+        elif parsed.path == "/shutdown":
+            # Loopback only. Exit cleanly; the next Claude Code activity
+            # respawns the daemon with a fresh env.sh (setup_claude.py uses it).
+            if self.client_address[0] not in ("127.0.0.1", "::1"):
+                self._reply(403)
+                return
+            self._reply(200, b'{"ok":true}')
+            STOP.set()
 
         elif parsed.path == "/statusline":
             # claude adapter: statusline payload
             sid = data.get("session_id") or "unknown"
-            STORE.report("claude-code", sid, claude_statusline_report(data))
+            kind, tag = host_tag_kind(host_fields.get("host_tag"))
+            reserve = est_width(tag) + 2 if kind == "text" else 0
+            STORE.report("claude-code", sid,
+                         {**claude_statusline_report(data, reserve), **host_fields})
             self._reply(200)
 
         else:
@@ -634,27 +749,29 @@ def serve_on(addr: str) -> ThreadingHTTPServer | None:
     return server
 
 
-def usb_bind_loop(stop: threading.Event, servers: list):
-    """The USB interface (10.0.4.21) appears only while the device is
-    plugged in - keep retrying so the device app can always reach us."""
+def bind_loop(addr: str, stop: threading.Event, servers: list):
+    """Secondary listeners. The USB interface (10.0.4.21) exists only while
+    the device is plugged in - keep retrying so the device app can always
+    reach us."""
     while not stop.is_set():
-        server = serve_on(LISTEN_ADDRS[1])
+        server = serve_on(addr)
         if server:
             servers.append(server)
-            log(f"USB-interface listener up on {LISTEN_ADDRS[1]}")
+            log(f"listener up on {addr}:{LISTEN_PORT}")
             return
         stop.wait(timeout=30)
 
 
 def main():
-    stop = threading.Event()
+    stop = STOP
     servers = []
 
     primary = serve_on(LISTEN_ADDRS[0])
     if primary is None:
         return 0  # another instance already owns the port
     servers.append(primary)
-    threading.Thread(target=usb_bind_loop, args=(stop, servers), daemon=True).start()
+    for addr in LISTEN_ADDRS[1:]:
+        threading.Thread(target=bind_loop, args=(addr, stop, servers), daemon=True).start()
 
     transport = make_transport()
 
@@ -670,8 +787,9 @@ def main():
         threading.Thread(target=render_loop, args=(transport, stop), daemon=True).start()
     if RENDER_MODE == "theme":
         threading.Thread(target=snapshot_watch_loop, args=(transport, stop), daemon=True).start()
-    log(f"listening on :{LISTEN_PORT}, render_mode={RENDER_MODE}, "
-        f"style={STYLE}, transport={os.environ.get('BUSYBAR_TRANSPORT', 'usb')}")
+    log(f"listening on {LISTEN_ADDRS[0]}:{LISTEN_PORT}, render_mode={RENDER_MODE}, "
+        f"style={STYLE}, transport={os.environ.get('BUSYBAR_TRANSPORT', 'usb')}, "
+        f"hub_token={'on' if HUB_TOKEN else 'off'}")
 
     while not stop.is_set():
         stop.wait(timeout=3600)

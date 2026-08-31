@@ -12,3 +12,4 @@ env.sh
 adapters/codex_notify_chain.sh
 adapters/codex_notify_chain.json
 adapters/.codex_adapter.pid
+.hub_down

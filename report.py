@@ -10,22 +10,34 @@ remains for existing POSIX installs. Must never slow Claude Code down:
 sub-second timeouts, failures ignored, daemon spawned detached.
 
 Reads env.sh next to this file for configuration (plain `KEY=VALUE` or
-`export KEY=VALUE` lines — the same file bash sources on macOS/Linux).
+`export KEY=VALUE` lines — the same file bash sources on macOS/Linux):
+
+    BUSYBAR_HUB=http://<hub>:8765   forward to the computer that owns the
+                                    Bar instead of running a daemon here
+    BUSYBAR_HUB_TOKEN=...           shared secret, if the hub requires one
+    BUSYBAR_HOST_TAG=W | #00A4EF    how this computer's sessions are marked
+                                    on the display (letter(s) or a flag color)
+    BUSYBAR_HOST=studio-pc          name shown in /status (default: hostname)
 """
 
 from __future__ import annotations
 
 import os
 import pathlib
+import platform
 import re
 import subprocess
 import sys
+import threading
+import time
 import urllib.request
 
 HERE = pathlib.Path(__file__).resolve().parent
 PORT = 8765
-BASE = f"http://127.0.0.1:{PORT}"
 LOG = pathlib.Path.home() / ".claude" / "busybar-daemon.log"
+DOWN_MARK = HERE / ".hub_down"   # touched when the hub is unreachable
+DOWN_BACKOFF_S = 20              # ... then skip forwarding for this long
+FORWARD_CAP_S = 1.2              # hard cap per hook, DNS included
 
 
 def load_env() -> dict:
@@ -40,6 +52,17 @@ def load_env() -> dict:
     return env
 
 
+ENV = load_env()
+HUB = ENV.get("BUSYBAR_HUB", "").strip().rstrip("/")
+BASE = HUB or f"http://127.0.0.1:{PORT}"
+HEADERS = {"Content-Type": "application/json",
+           "X-Busybar-Host": (ENV.get("BUSYBAR_HOST") or platform.node().split(".")[0])[:64] or "?"}
+if ENV.get("BUSYBAR_HOST_TAG"):
+    HEADERS["X-Busybar-Host-Tag"] = ENV["BUSYBAR_HOST_TAG"].strip()
+if ENV.get("BUSYBAR_HUB_TOKEN"):
+    HEADERS["X-Busybar-Token"] = ENV["BUSYBAR_HUB_TOKEN"].strip()
+
+
 def daemon_alive() -> bool:
     try:
         urllib.request.urlopen(BASE + "/health", timeout=0.4)
@@ -49,8 +72,8 @@ def daemon_alive() -> bool:
 
 
 def ensure_daemon():
-    if daemon_alive():
-        return
+    if HUB or daemon_alive():
+        return  # a hub runs the daemon for us
     try:
         if LOG.exists() and LOG.stat().st_size > 1 << 20:
             LOG.write_text("")
@@ -59,7 +82,7 @@ def ensure_daemon():
     except OSError:
         log = subprocess.DEVNULL
     kwargs: dict = {"stdout": log, "stderr": log, "stdin": subprocess.DEVNULL,
-                    "env": load_env(), "cwd": str(HERE)}
+                    "env": ENV, "cwd": str(HERE)}
     if os.name == "nt":
         kwargs["creationflags"] = (subprocess.DETACHED_PROCESS
                                    | subprocess.CREATE_NEW_PROCESS_GROUP)
@@ -69,13 +92,41 @@ def ensure_daemon():
     subprocess.Popen([sys.executable, str(HERE / "daemon.py")], **kwargs)
 
 
-def forward(path: str, body: bytes):
+def _hub_down() -> bool:
     try:
-        urllib.request.urlopen(urllib.request.Request(
-            BASE + path, data=body,
-            headers={"Content-Type": "application/json"}), timeout=1)
+        return time.time() - DOWN_MARK.stat().st_mtime < DOWN_BACKOFF_S
     except OSError:
-        pass
+        return False
+
+
+def forward(path: str, body: bytes) -> bool:
+    """POST to the daemon/hub. Runs in a daemon thread so a stalled DNS
+    lookup or an asleep hub can never hold a Claude Code hook longer than
+    FORWARD_CAP_S; an unreachable hub is then backed off for a while."""
+    if HUB and _hub_down():
+        return False
+    ok = [False]
+
+    def _post():
+        try:
+            urllib.request.urlopen(urllib.request.Request(
+                BASE + path, data=body, headers=HEADERS), timeout=1)
+            ok[0] = True
+        except OSError:
+            pass
+
+    t = threading.Thread(target=_post, daemon=True)
+    t.start()
+    t.join(FORWARD_CAP_S)
+    if HUB:
+        try:
+            if ok[0]:
+                DOWN_MARK.unlink(missing_ok=True)
+            else:
+                DOWN_MARK.touch()
+        except OSError:
+            pass
+    return ok[0]
 
 
 def main():

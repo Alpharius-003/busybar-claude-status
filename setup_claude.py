@@ -5,6 +5,16 @@ Works on macOS, Linux and Windows.
     python3 setup_claude.py install     (Windows: py setup_claude.py install)
     python3 setup_claude.py uninstall
 
+Several computers, one Bar (all options persist into env.sh):
+    setup_claude.py install --lan                  # on the computer with the Bar
+    setup_claude.py install --hub http://<that-computer>.local:8765 --tag "#00A4EF"
+                                                   # on every other computer
+  --tag    marks this computer's sessions on the display: a "#RRGGBB" color
+           draws a small flag beside the model name (costs no space), one or
+           two letters (e.g. W) are written after it (model name shortened)
+  --token  shared secret (give the same value to the hub and every client)
+  --host   name for this computer in /status (default: its hostname)
+
 install:
   - backs up ~/.claude/settings.json (and your statusline script, if any)
   - appends state-reporting hook commands alongside whatever hooks you
@@ -19,16 +29,20 @@ uninstall reverses both. Re-running install is a no-op if already wired.
 
 from __future__ import annotations
 
+import argparse
 import json
 import pathlib
+import re
 import shutil
 import sys
 import time
+import urllib.request
 
 HERE = pathlib.Path(__file__).resolve().parent
 CLAUDE_DIR = pathlib.Path.home() / ".claude"
 SETTINGS = CLAUDE_DIR / "settings.json"
 WRAPPER = CLAUDE_DIR / "busybar-statusline.py"
+ENV_FILE = HERE / "env.sh"
 PY = sys.executable
 
 HOOK_STATES = {
@@ -68,6 +82,48 @@ print(f"[{{model}}]")
 '''
 
 
+def set_env(key: str, value: str | None):
+    """Persist KEY=value in env.sh (read by report.py/report.sh on every
+    call and inherited by the daemon). None removes the key."""
+    lines = ENV_FILE.read_text().splitlines() if ENV_FILE.exists() else []
+    pat = re.compile(rf"^\s*(export\s+)?{re.escape(key)}=")
+    lines = [ln for ln in lines if not pat.match(ln)]
+    if value is not None:
+        lines.append(f'export {key}="{value}"')
+        print(f"env.sh: {key}={value}")
+    else:
+        print(f"env.sh: {key} removed")
+    ENV_FILE.write_text("\n".join(lines) + ("\n" if lines else ""))
+
+
+def apply_config(args) -> bool:
+    """Write the --lan/--hub/--tag/--token/--host options; True if any."""
+    changed = False
+    if args.lan:
+        set_env("BUSYBAR_LISTEN", "0.0.0.0")
+        changed = True
+    if args.hub:
+        set_env("BUSYBAR_HUB", args.hub.rstrip("/"))
+        changed = True
+    for key, val in (("BUSYBAR_HOST_TAG", args.tag), ("BUSYBAR_HUB_TOKEN", args.token),
+                     ("BUSYBAR_HOST", args.host)):
+        if val is not None:
+            set_env(key, val or None)
+            changed = True
+    return changed
+
+
+def restart_local_daemon():
+    """Ask a running local daemon to exit so the next Claude Code activity
+    respawns it with the new env.sh (no-op when none is running)."""
+    try:
+        urllib.request.urlopen(urllib.request.Request(
+            "http://127.0.0.1:8765/shutdown", data=b"{}", method="POST"), timeout=1)
+        print("daemon: stopped; it restarts with the new config on the next activity")
+    except OSError:
+        pass
+
+
 def hook_cmd(state: str) -> str:
     return f'"{PY}" "{HERE / "report.py"}" state {state}'
 
@@ -92,7 +148,7 @@ def _is_ours(command: str) -> bool:
     return str(HERE) in command or "busybar-statusline" in command
 
 
-def install():
+def install(args):
     cfg = load_settings()
     backup(SETTINGS)
 
@@ -143,6 +199,12 @@ def install():
             print(f"statusline: wrapper installed at {WRAPPER}")
 
     save_settings(cfg)
+    if apply_config(args):
+        restart_local_daemon()
+    if args.hub or (ENV_FILE.exists() and "BUSYBAR_HUB=" in ENV_FILE.read_text()):
+        print("mode: forwarding to the hub - no daemon runs on this computer.\n"
+              "      The hub must run with BUSYBAR_LISTEN=0.0.0.0 "
+              "(setup_claude.py install --lan there).")
     print("done — restart your Claude Code sessions to pick up the hooks.")
 
 
@@ -189,10 +251,18 @@ def uninstall():
 
 
 if __name__ == "__main__":
-    cmd = sys.argv[1] if len(sys.argv) > 1 else ""
-    if cmd == "install":
-        install()
-    elif cmd == "uninstall":
-        uninstall()
+    ap = argparse.ArgumentParser(description=__doc__,
+                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("command", choices=["install", "uninstall"])
+    ap.add_argument("--lan", action="store_true",
+                    help="accept reports from other computers (hub role)")
+    ap.add_argument("--hub", metavar="URL",
+                    help="forward to the computer that owns the Bar, e.g. http://mac.local:8765")
+    ap.add_argument("--tag", metavar="TAG", help='host tag: "#RRGGBB" flag or 1-2 letters ("" clears)')
+    ap.add_argument("--token", metavar="SECRET", help='shared secret for LAN reports ("" clears)')
+    ap.add_argument("--host", metavar="NAME", help='this computer\'s name in /status ("" clears)')
+    args = ap.parse_args()
+    if args.command == "install":
+        install(args)
     else:
-        sys.exit(__doc__)
+        uninstall()

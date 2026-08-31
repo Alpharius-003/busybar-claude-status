@@ -43,13 +43,20 @@ curl -X POST http://127.0.0.1:8765/v1/report -H 'Content-Type: application/json'
 | `badges` | array of names | no | small glyphs after the label; known: `fast` (lightning bolt). Unknown names are ignored, so reporting a badge is always safe |
 | `ttl_s` | seconds | no | session forgotten after this silence (default 6h) |
 | `ended` | bool | no | `true` removes the session immediately |
+| `host` | string ≤64 | no | computer the session lives on (or header `X-Busybar-Host`) |
+| `host_tag` | string ≤9 | no | display marker for that computer: `#RRGGBB` flag or 1–2 letters (or header `X-Busybar-Host-Tag`) |
 
 Semantics:
 
 - Reports **merge**: send `state` from lifecycle hooks and data fields
   from wherever you compute them, at different rates.
-- With several sessions/tools reporting, the **most recently active one
-  owns the display** (`GET /status` shows which, including `source`).
+- With several sessions/tools reporting, the display **follows
+  attention**: among sessions whose state is not `IDLE`, the one with the
+  newest *attention event* wins — a report of `THINKING` or `WAIT`, or
+  `WORKING` arriving while the session was `IDLE`/`COMPLETE` (a task
+  starting). Data-only reports and repeated `WORKING` never move the
+  display; a background session surfaces once the focused one is idle.
+  `GET /status` shows which one is shown (`source`, `host`).
 - Every field except `source`/`session_id` degrades gracefully when
   missing — a state-only reporter still gets the ring + state word.
 - `COMPLETE` auto-decays to `IDLE` after 30 s; `IDLE` releases the
@@ -94,6 +101,26 @@ An adapter is just "run curl at the right moments":
 Keep one stable `session_id` per logical session so merging works.
 
 ---
+
+### Several computers: one hub, many forwarders
+
+The daemon is a hub as soon as it listens on the LAN
+(`BUSYBAR_LISTEN=0.0.0.0`, or `setup_claude.py install --lan`). Any other
+computer sets `BUSYBAR_HUB=http://<hub>:8765` and runs no daemon at all:
+`report.py`/`report.sh` and the Codex adapter simply post there. Every
+report may carry two headers, which the hub stores per session:
+
+| Header | Meaning |
+| --- | --- |
+| `X-Busybar-Host` | the reporting computer (`BUSYBAR_HOST`, default hostname) |
+| `X-Busybar-Host-Tag` | display marker: `#RRGGBB[AA]` = a 2×5 flag left of the label; 1–2 chars = text after the label |
+| `X-Busybar-Token` | shared secret, required for non-loopback reports when the hub sets `BUSYBAR_HUB_TOKEN` |
+
+`/v1/report` accepts the same as JSON fields `host` / `host_tag`.
+`POST /shutdown` (loopback only) makes the daemon exit so the next
+activity respawns it with a fresh `env.sh`. Hub mode is orthogonal to
+the transport: with `BUSYBAR_TRANSPORT=wifi` the hub can be any always-on
+box rather than the computer the Bar is plugged into.
 
 ## 2. Transports
 
