@@ -71,8 +71,10 @@ hooks support. On Windows use `py`/`python` instead of `python3` —
 every entry point resolves the interpreter via `sys.executable`, and
 the glue layer (`report.py`, `adapters/codex_notify.py`) is pure Python
 with no bash/nohup/pgrep dependencies. (`report.sh` remains for
-existing POSIX installs.) Windows support is implemented per spec but
-not yet tested on real hardware — issues welcome.
+existing POSIX installs.) Verified on a real Windows machine as a hub
+client (hooks + statusline forwarded over Wi-Fi, see below); running
+the daemon itself on Windows with the Bar on its USB port is untested —
+issues welcome.
 
 ```bash
 git clone https://github.com/Alpharius-003/busybar-claude-status
@@ -240,8 +242,7 @@ Things discovered the hard way, verified on-device:
 
 ## Disclaimers
 
-Not affiliated with BUSY or Anthropic. Tested only on BUSY Bar firmware
-1.1.1 and Claude Code 2.x on macOS; the multi-computer hub was verified
-with a simulated second client on the same LAN, not yet from a real
-Windows machine. The firmware quirks above may change
-in any update. MIT licensed.
+Not affiliated with BUSY or Anthropic. Tested on BUSY Bar firmware
+1.1.1 with Claude Code 2.x: the daemon on macOS (Bar on USB), plus a
+Windows machine as a hub client over Wi-Fi. The firmware quirks above
+may change in any update. MIT licensed.

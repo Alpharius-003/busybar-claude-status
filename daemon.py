@@ -179,9 +179,9 @@ def make_transport() -> HttpTransport:
     if kind == "usb":
         return HttpTransport("http://10.0.4.20/api")
     if kind == "wifi":
-        host = os.environ.get("BUSYBAR_HOST")
+        host = os.environ.get("BUSYBAR_DEVICE")
         if not host:
-            sys.exit("wifi transport needs BUSYBAR_HOST (device LAN IP)")
+            sys.exit("wifi transport needs BUSYBAR_DEVICE (the Bar's LAN IP or name)")
         headers = {}
         if os.environ.get("BUSYBAR_TOKEN"):
             headers["x-api-token"] = os.environ["BUSYBAR_TOKEN"]

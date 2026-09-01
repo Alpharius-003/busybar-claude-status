@@ -4,8 +4,8 @@
 和当前会话状态实时显示到 Busy Bar 的前置 LED 屏（72×16）上。
 
 [English docs](README.md) ｜ 支持 macOS / Linux / **Windows**（Windows 用
-`py setup_claude.py install`，胶水层为纯 Python 无 bash 依赖，硬件实测
-仅覆盖 macOS）｜ 安装：`python3 setup_claude.py install`
+`py setup_claude.py install`，胶水层为纯 Python 无 bash 依赖；硬件实测：
+macOS 直连 Bar，Windows 作为枢纽客户端经 Wi-Fi 转发）｜ 安装：`python3 setup_claude.py install`
 （自动备份并接入 `~/.claude` 的 statusline 与 hooks，`uninstall` 可完整还原；
 动画资产用 `python3 animgen.py anims/` 生成后经 `/api/assets/upload` 上传，
 详见英文 README 的 Install 一节）。

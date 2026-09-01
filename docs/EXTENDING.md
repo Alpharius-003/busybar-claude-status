@@ -129,7 +129,7 @@ Selected with `BUSYBAR_TRANSPORT` (default `usb`):
 | Transport | Config | Notes |
 | --- | --- | --- |
 | `usb` | none | `http://10.0.4.20/api`, no auth, lowest latency |
-| `wifi` | `BUSYBAR_HOST` (device LAN IP), `BUSYBAR_TOKEN` (password) | enable Wi-Fi access + set the password in the device web UI (`http://10.0.4.20` → Network); token goes in the `x-api-token` header |
+| `wifi` | `BUSYBAR_DEVICE` (the Bar's LAN IP), `BUSYBAR_TOKEN` (access key) | the Bar answers 403 over Wi-Fi until access is enabled: over USB, `curl -X POST 'http://10.0.4.20/api/access?mode=key&key=12345678'` (4–10 digits; the device web UI → Network does the same); the key travels in the `X-API-Token` header |
 | `cloud` | `BUSYBAR_TOKEN` (API token from the BUSY account) | `https://api.busy.app/busybar`, `Authorization: Bearer`; works anywhere, highest latency |
 | `ble` | — | designed below, not implemented |
 
