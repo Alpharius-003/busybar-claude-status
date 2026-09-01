@@ -45,6 +45,7 @@ curl -X POST http://127.0.0.1:8765/v1/report -H 'Content-Type: application/json'
 | `ended` | bool | no | `true` removes the session immediately |
 | `host` | string ≤64 | no | computer the session lives on (or header `X-Busybar-Host`) |
 | `host_tag` | string ≤9 | no | display marker for that computer: `#RRGGBB` flag or 1–2 letters (or header `X-Busybar-Host-Tag`) |
+| `rev`, `lease_s`, `focus_age_s`, `state_age_s`, `active_age_s` | mirror only | no | sent by a standby daemon under header `X-Busybar-Mirror: 1` (see "Standby" below); direct clients never send them |
 
 Semantics:
 
@@ -115,12 +116,72 @@ report may carry two headers, which the hub stores per session:
 | `X-Busybar-Host` | the reporting computer (`BUSYBAR_HOST`, default hostname) |
 | `X-Busybar-Host-Tag` | display marker: `#RRGGBB[AA]` = a 2×5 flag left of the label; 1–2 chars = text after the label |
 | `X-Busybar-Token` | shared secret, required for non-loopback reports when the hub sets `BUSYBAR_HUB_TOKEN` |
+| `X-Busybar-Mirror` | `1` on reports a standby daemon mirrors; the hub stores them as `mirrored` and never mirrors them onward (no loops) |
 
 `/v1/report` accepts the same as JSON fields `host` / `host_tag`.
 `POST /shutdown` (loopback only) makes the daemon exit so the next
 activity respawns it with a fresh `env.sh`. Hub mode is orthogonal to
 the transport: with `BUSYBAR_TRANSPORT=wifi` the hub can be any always-on
 box rather than the computer the Bar is plugged into.
+
+### Standby: a second daemon that paints while the hub is out
+
+`BUSYBAR_HUB=<url>` plus `BUSYBAR_STANDBY=1` (`setup_claude.py install
+--hub URL --standby --transport wifi --device <Bar LAN IP> --device-token
+<key>`) turns a daemon into a standby. `report.py`/`report.sh` then talk
+to the local daemon as usual; the daemon (`HubLink` in `daemon.py`) does
+the rest:
+
+- **Mirror.** Every session that originates locally is posted to the
+  hub's `/v1/report` as a full record: coalesced per session, in order,
+  `state` included only when it differs from what the hub last
+  acknowledged (so any hub version sees exactly the transitions a direct
+  client would have sent — no focus theft from repeated `WAIT`), ages
+  (`focus_age_s`, `state_age_s`, `active_age_s`, computed at send time)
+  instead of timestamps so clock skew between computers cancels out, a
+  per-session `rev` (`max(prev+1, now_ms)`) so a late or duplicated
+  delivery can never move a record backwards or resurrect an ended one
+  (tombstones are kept 5 min), and `lease_s: 90` refreshed by a heartbeat
+  every 30 s so a standby that dies takes its sessions with it. The hub
+  derives `focus_ts`/`state_ts`/`last_active` from the ages and uses the
+  mirrored `focus_ts` instead of its own attention rule, and answers
+  `{"ok": true, "created": bool}` — `created` tells the standby the hub
+  had forgotten that session (lease, its own sleep), so the state is sent
+  again. Mirror fields are honoured only under the `X-Busybar-Mirror`
+  header; `lease_s` is capped at 900 s.
+- **Takeover.** The hub is probed (`GET /hub`, `GET /health` on older
+  hubs) every 3 s while idle; deliveries count as probes. After three
+  consecutive failures the standby paints — but a failure only counts
+  while the Bar itself answers `GET /api/version`, so a standby whose own
+  network is down (or that just woke from sleep) never takes over by
+  mistake. The hub saying `device_ok: false` (Bar unplugged) also
+  (three probes in a row, same debounce) also triggers a takeover. The
+  first frame is preceded by one `DELETE` of the app so the hub's
+  leftovers (possibly another style's elements) go. A standby waking from
+  its own sleep discards all prior evidence and re-mirrors everything.
+- **Yield.** On the first successful probe the standby, under its render
+  lock (so no draw of its own is in flight), resyncs every session with
+  transitions, then `POST /redraw`s the hub — which clears and repaints
+  the shared canvas from scratch — and only then stops painting. It never
+  deletes the app while the hub is up, including at exit.
+- A changed `instance` in `GET /hub` (hub restarted) triggers a resync; a
+  `style` mismatch is logged once; `role: standby` on the probed side
+  (two standbys pointing at each other) or the daemon's own instance
+  disables the link with a log line.
+
+Endpoints added for this: `GET /hub` → `{instance, role, style,
+render_mode, device_ok, device_error, rendering}` (any daemon);
+`POST /redraw` (token-authorized like every POST) → clear + full
+repaint, or clear when there is nothing to show; `GET /standby` on a
+standby → its view of the hub, queue and last error. All LAN/loopback
+requests bypass HTTP proxies on purpose.
+
+Test rig on one computer: `daemon.py --port 8766` with
+`BUSYBAR_LISTEN=127.0.0.1 BUSYBAR_HUB=http://127.0.0.1:8765
+BUSYBAR_STANDBY=1 BUSYBAR_TRANSPORT=wifi BUSYBAR_DEVICE=<Bar LAN IP>
+BUSYBAR_TOKEN=<key>` next to the real hub; post hooks to `:8766`, then
+`kill -STOP` / `kill -CONT` the hub to play sleep and wake, watching
+`GET /api/screen` on the Bar and `GET :8766/standby`.
 
 ## 2. Transports
 

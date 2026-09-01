@@ -14,6 +14,9 @@ Reads env.sh next to this file for configuration (plain `KEY=VALUE` or
 
     BUSYBAR_HUB=http://<hub>:8765   forward to the computer that owns the
                                     Bar instead of running a daemon here
+    BUSYBAR_STANDBY=1               ... but do run a local daemon: it mirrors
+                                    to the hub and takes over the Bar (over
+                                    Wi-Fi) while the hub is asleep
     BUSYBAR_HUB_TOKEN=...           shared secret, if the hub requires one
     BUSYBAR_HOST_TAG=W | #00A4EF    how this computer's sessions are marked
                                     on the display (letter(s) or a flag color)
@@ -30,6 +33,7 @@ import subprocess
 import sys
 import threading
 import time
+import urllib.error
 import urllib.request
 
 HERE = pathlib.Path(__file__).resolve().parent
@@ -38,6 +42,10 @@ LOG = pathlib.Path.home() / ".claude" / "busybar-daemon.log"
 DOWN_MARK = HERE / ".hub_down"   # touched when the hub is unreachable
 DOWN_BACKOFF_S = 20              # ... then skip forwarding for this long
 FORWARD_CAP_S = 1.2              # hard cap per hook, DNS included
+# Loopback and LAN requests never go through a proxy (HTTP_PROXY, Windows
+# system proxy) - a proxy is never the route to 127.0.0.1 or to the hub.
+OPENER = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+PROC = None                      # the daemon this call started (it may still be binding)
 
 
 def load_env() -> dict:
@@ -54,7 +62,11 @@ def load_env() -> dict:
 
 ENV = load_env()
 HUB = ENV.get("BUSYBAR_HUB", "").strip().rstrip("/")
-BASE = HUB or f"http://127.0.0.1:{PORT}"
+STANDBY = ENV.get("BUSYBAR_STANDBY", "").strip().lower() in ("1", "true", "yes", "on")
+# Forwarder mode talks to the hub and runs nothing here; standby mode talks
+# to the local daemon, which mirrors to the hub itself (daemon.py HubLink).
+FORWARD_TO_HUB = bool(HUB) and not STANDBY
+BASE = HUB if FORWARD_TO_HUB else f"http://127.0.0.1:{PORT}"
 HEADERS = {"Content-Type": "application/json",
            "X-Busybar-Host": (ENV.get("BUSYBAR_HOST") or platform.node().split(".")[0])[:64] or "?"}
 if ENV.get("BUSYBAR_HOST_TAG"):
@@ -65,14 +77,14 @@ if ENV.get("BUSYBAR_HUB_TOKEN"):
 
 def daemon_alive() -> bool:
     try:
-        urllib.request.urlopen(BASE + "/health", timeout=0.4)
+        OPENER.open(BASE + "/health", timeout=0.4)
         return True
     except OSError:
         return False
 
 
 def ensure_daemon():
-    if HUB or daemon_alive():
+    if FORWARD_TO_HUB or daemon_alive():
         return  # a hub runs the daemon for us
     try:
         if LOG.exists() and LOG.stat().st_size > 1 << 20:
@@ -83,13 +95,22 @@ def ensure_daemon():
         log = subprocess.DEVNULL
     kwargs: dict = {"stdout": log, "stderr": log, "stdin": subprocess.DEVNULL,
                     "env": ENV, "cwd": str(HERE)}
+    global PROC
+    flags = 0
     if os.name == "nt":
-        kwargs["creationflags"] = (subprocess.DETACHED_PROCESS
-                                   | subprocess.CREATE_NEW_PROCESS_GROUP)
+        flags = subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP
+        # CREATE_BREAKAWAY_FROM_JOB: outlive a job object the hook runs in.
+        kwargs["creationflags"] = flags | 0x01000000
     else:
         kwargs["start_new_session"] = True
     # sys.executable sidesteps the python vs python3 naming mess entirely.
-    subprocess.Popen([sys.executable, str(HERE / "daemon.py")], **kwargs)
+    try:
+        PROC = subprocess.Popen([sys.executable, str(HERE / "daemon.py")], **kwargs)
+    except OSError:
+        if os.name != "nt":
+            raise
+        kwargs["creationflags"] = flags   # breakaway not permitted here
+        PROC = subprocess.Popen([sys.executable, str(HERE / "daemon.py")], **kwargs)
 
 
 def _hub_down() -> bool:
@@ -103,22 +124,34 @@ def forward(path: str, body: bytes) -> bool:
     """POST to the daemon/hub. Runs in a daemon thread so a stalled DNS
     lookup or an asleep hub can never hold a Claude Code hook longer than
     FORWARD_CAP_S; an unreachable hub is then backed off for a while."""
-    if HUB and _hub_down():
+    if FORWARD_TO_HUB and _hub_down():
         return False
     ok = [False]
 
     def _post():
-        try:
-            urllib.request.urlopen(urllib.request.Request(
-                BASE + path, data=body, headers=HEADERS), timeout=1)
-            ok[0] = True
-        except OSError:
-            pass
+        deadline = time.time() + FORWARD_CAP_S
+        while True:
+            try:
+                OPENER.open(urllib.request.Request(BASE + path, data=body, headers=HEADERS),
+                            timeout=1)
+                ok[0] = True
+                return
+            except urllib.error.URLError as e:
+                # A daemon we just started may still be binding its port -
+                # but one that already exited (bad env.sh) never will.
+                if (PROC is not None and PROC.poll() is None
+                        and isinstance(e.reason, ConnectionRefusedError)
+                        and time.time() < deadline):
+                    time.sleep(0.05)
+                    continue
+                return
+            except OSError:
+                return
 
     t = threading.Thread(target=_post, daemon=True)
     t.start()
     t.join(FORWARD_CAP_S)
-    if HUB:
+    if FORWARD_TO_HUB:
         try:
             if ok[0]:
                 DOWN_MARK.unlink(missing_ok=True)

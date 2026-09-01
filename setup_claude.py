@@ -14,6 +14,18 @@ Several computers, one Bar (all options persist into env.sh):
            two letters (e.g. W) are written after it (model name shortened)
   --token  shared secret (give the same value to the hub and every client)
   --host   name for this computer in /status (default: its hostname)
+  --style  minimal | avatar (keep it the same on every computer)
+
+When the hub sleeps (a laptop with the Bar on USB), a second computer can
+keep the display alive over the Bar's Wi-Fi as a standby:
+    setup_claude.py install --hub http://<hub>.local:8765 --standby \
+        --transport wifi --device <Bar LAN IP> --device-token <key>
+  The standby runs a local daemon that mirrors its sessions to the hub and
+  draws only while the hub is unreachable (about 10 s) or cannot reach the
+  Bar; it yields the moment the hub is back. --no-standby returns to plain
+  forwarding. The Bar's Wi-Fi API key (4-10 digits, use 10) is set once
+  over USB - it grants full control of the Bar to anyone on the LAN:
+    curl -X POST 'http://10.0.4.20/api/access?mode=key&key=1234567890'
 
 install:
   - backs up ~/.claude/settings.json (and your statusline script, if any)
@@ -90,10 +102,51 @@ def set_env(key: str, value: str | None):
     lines = [ln for ln in lines if not pat.match(ln)]
     if value is not None:
         lines.append(f'export {key}="{value}"')
-        print(f"env.sh: {key}={value}")
+        print(f"env.sh: {key}={'****' if key.endswith('TOKEN') else value}")
     else:
         print(f"env.sh: {key} removed")
     ENV_FILE.write_text("\n".join(lines) + ("\n" if lines else ""))
+    if sys.platform != "win32" and "TOKEN=" in ENV_FILE.read_text():
+        try:
+            ENV_FILE.chmod(0o600)
+        except OSError:
+            pass
+
+
+def read_env() -> dict:
+    """What env.sh currently says (the daemon and report.py read the same file)."""
+    env = {}
+    if ENV_FILE.exists():
+        for line in ENV_FILE.read_text().splitlines():
+            m = re.match(r'\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)=("?)(.*)\2\s*$', line)
+            if m and not line.lstrip().startswith("#"):
+                env[m.group(1)] = m.group(3)
+    return env
+
+
+def check_setup(env: dict):
+    """Post-install probes: the hub and the Bar, with the credentials written."""
+    hub = env.get("BUSYBAR_HUB", "").rstrip("/")
+    if hub:
+        hdr = {"Content-Type": "application/json"}
+        if env.get("BUSYBAR_HUB_TOKEN"):
+            hdr["X-Busybar-Token"] = env["BUSYBAR_HUB_TOKEN"]
+        code = http("POST", hub + "/v1/report", hdr,
+                    b'{"source":"setup","session_id":"probe","ended":true}')
+        print({0: f"hub: {hub} does not answer (asleep? not --lan? firewall?)",
+               200: f"hub: {hub} accepts reports",
+               401: "hub: rejects the token - run install --token on both computers with the same value",
+               }.get(code, f"hub: answered {code} to a probe"))
+    if env.get("BUSYBAR_STANDBY") and env.get("BUSYBAR_TRANSPORT") == "wifi":
+        dev = env.get("BUSYBAR_DEVICE", "")
+        hdr = {"X-API-Token": env.get("BUSYBAR_TOKEN", "")}
+        # /api/version answers without a key; /api/wifi/status needs one.
+        code = http("GET", f"http://{dev}/api/wifi/status", hdr)
+        print({0: f"Bar: http://{dev} does not answer over Wi-Fi (IP right? on the same LAN?)",
+               200: f"Bar: reachable over Wi-Fi at {dev} with the key",
+               403: "Bar: key rejected - enable Wi-Fi access over USB on the computer with the Bar:\n"
+                    "     curl -X POST 'http://10.0.4.20/api/access?mode=key&key=<your 10 digits>'",
+               }.get(code, f"Bar: answered {code}"))
 
 
 def apply_config(args) -> bool:
@@ -105,23 +158,48 @@ def apply_config(args) -> bool:
     if args.hub:
         set_env("BUSYBAR_HUB", args.hub.rstrip("/"))
         changed = True
+    if args.standby:
+        set_env("BUSYBAR_STANDBY", "1")
+        changed = True
+    if args.no_standby:
+        set_env("BUSYBAR_STANDBY", None)
+        changed = True
+    if args.transport:
+        set_env("BUSYBAR_TRANSPORT", args.transport)
+        changed = True
+    if args.style:
+        set_env("BUSYBAR_STYLE", args.style)
+        changed = True
+    if args.device:
+        args.device = re.sub(r"^https?://", "", args.device).strip().rstrip("/")
     for key, val in (("BUSYBAR_HOST_TAG", args.tag), ("BUSYBAR_HUB_TOKEN", args.token),
-                     ("BUSYBAR_HOST", args.host)):
+                     ("BUSYBAR_HOST", args.host), ("BUSYBAR_DEVICE", args.device),
+                     ("BUSYBAR_TOKEN", args.device_token)):
         if val is not None:
             set_env(key, val or None)
             changed = True
     return changed
 
 
+def http(method: str, url: str, headers: dict | None = None, body: bytes | None = None,
+         timeout: float = 3.0) -> int:
+    """Status code, 0 when nothing answered. Proxies are bypassed on purpose."""
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+    req = urllib.request.Request(url, data=body, method=method, headers=headers or {})
+    try:
+        with opener.open(req, timeout=timeout) as r:
+            return r.status
+    except urllib.error.HTTPError as e:
+        return e.code
+    except OSError:
+        return 0
+
+
 def restart_local_daemon():
     """Ask a running local daemon to exit so the next Claude Code activity
     respawns it with the new env.sh (no-op when none is running)."""
-    try:
-        urllib.request.urlopen(urllib.request.Request(
-            "http://127.0.0.1:8765/shutdown", data=b"{}", method="POST"), timeout=1)
+    if http("POST", "http://127.0.0.1:8765/shutdown", body=b"{}", timeout=1.0) == 200:
         print("daemon: stopped; it restarts with the new config on the next activity")
-    except OSError:
-        pass
 
 
 def hook_cmd(state: str) -> str:
@@ -201,10 +279,18 @@ def install(args):
     save_settings(cfg)
     if apply_config(args):
         restart_local_daemon()
-    if args.hub or (ENV_FILE.exists() and "BUSYBAR_HUB=" in ENV_FILE.read_text()):
-        print("mode: forwarding to the hub - no daemon runs on this computer.\n"
-              "      The hub must run with BUSYBAR_LISTEN=0.0.0.0 "
-              "(setup_claude.py install --lan there).")
+    env = read_env()
+    if env.get("BUSYBAR_HUB"):
+        if env.get("BUSYBAR_STANDBY"):
+            print("mode: standby - the local daemon mirrors to the hub and paints the Bar\n"
+                  f"      over {env.get('BUSYBAR_TRANSPORT', 'usb')} only while the hub is out.")
+        else:
+            print("mode: forwarding to the hub - no daemon runs on this computer.\n"
+                  "      The hub must run with BUSYBAR_LISTEN=0.0.0.0 "
+                  "(setup_claude.py install --lan there).")
+    elif env.get("BUSYBAR_LISTEN") == "0.0.0.0":
+        print("mode: hub - accepting reports from the LAN.")
+    check_setup(env)
     print("done — restart your Claude Code sessions to pick up the hooks.")
 
 
@@ -220,6 +306,7 @@ def uninstall():
                           if not _is_ours(h.get("command", ""))]
             removed += before - len(g["hooks"])
     print(f"hooks: {removed} command(s) removed")
+    restart_local_daemon()
 
     sl = cfg.get("statusLine") or {}
     if "busybar-statusline" in sl.get("command", ""):
@@ -247,6 +334,8 @@ def uninstall():
             print(f"statusline: forward line removed from {target}")
 
     save_settings(cfg)
+    if ENV_FILE.exists():
+        print(f"env.sh kept ({', '.join(sorted(read_env()))}): delete it to forget this setup.")
     print("done.")
 
 
@@ -261,7 +350,52 @@ if __name__ == "__main__":
     ap.add_argument("--tag", metavar="TAG", help='host tag: "#RRGGBB" flag or 1-2 letters ("" clears)')
     ap.add_argument("--token", metavar="SECRET", help='shared secret for LAN reports ("" clears)')
     ap.add_argument("--host", metavar="NAME", help='this computer\'s name in /status ("" clears)')
+    ap.add_argument("--standby", action="store_true",
+                    help="with --hub: run a local daemon that mirrors to the hub and takes "
+                         "over the Bar (via --transport) while the hub is asleep")
+    ap.add_argument("--no-standby", action="store_true", help="back to plain forwarding")
+    ap.add_argument("--transport", choices=["usb", "wifi", "cloud"],
+                    help="how this daemon reaches the Bar (BUSYBAR_TRANSPORT)")
+    ap.add_argument("--device", metavar="HOST",
+                    help='the Bar\'s LAN IP or name for --transport wifi ("" clears)')
+    ap.add_argument("--device-token", metavar="KEY",
+                    help='the Bar\'s Wi-Fi access key / cloud API token ("" clears)')
+    ap.add_argument("--style", choices=["minimal", "avatar"],
+                    help="display style (BUSYBAR_STYLE); keep it the same on every computer")
     args = ap.parse_args()
+    if args.command == "install":
+        # What env.sh will say once the flags are applied.
+        eff = read_env()
+        for key, val in (("BUSYBAR_HUB", args.hub), ("BUSYBAR_TRANSPORT", args.transport),
+                         ("BUSYBAR_DEVICE", args.device), ("BUSYBAR_TOKEN", args.device_token)):
+            if val is not None:
+                if val:
+                    eff[key] = val
+                else:
+                    eff.pop(key, None)   # "" clears the key
+        was_standby = eff.get("BUSYBAR_STANDBY", "").lower() in ("1", "true", "yes", "on")
+        standby = (args.standby or was_standby) and not args.no_standby
+        if args.standby and args.no_standby:
+            ap.error("--standby and --no-standby together?")
+        if standby and not eff.get("BUSYBAR_HUB"):
+            ap.error("--standby needs a hub: add --hub http://<hub>:8765")
+        if standby and eff.get("BUSYBAR_TRANSPORT", "usb") not in ("wifi", "cloud"):
+            ap.error("a standby cannot use the hub's USB link: add --transport wifi "
+                     "--device <Bar LAN IP> --device-token <key>")
+        if eff.get("BUSYBAR_TRANSPORT") == "wifi" and not eff.get("BUSYBAR_DEVICE"):
+            ap.error("--transport wifi needs --device <the Bar's LAN IP>")
+        if eff.get("BUSYBAR_TRANSPORT") == "cloud" and not eff.get("BUSYBAR_TOKEN"):
+            ap.error("--transport cloud needs --device-token <API token from the BUSY app>")
+        if eff.get("BUSYBAR_TRANSPORT") == "wifi" and args.device_token:
+            if not re.fullmatch(r"[0-9]{4,10}", args.device_token):
+                ap.error("--device-token must be the 4-10 digit key set over USB "
+                         "(POST /api/access?mode=key&key=...)")
+            if len(args.device_token) < 8:
+                print(f"warning: a {len(args.device_token)}-digit key is brute-forceable on the "
+                      "LAN within minutes; prefer 10 digits (rotate over USB, then re-run install)")
+        if args.lan and standby:
+            print("warning: --lan on a standby is unusual (other computers would report to "
+                  "a daemon that paints only while the hub is out)")
     if args.command == "install":
         install(args)
     else:

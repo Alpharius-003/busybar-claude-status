@@ -185,6 +185,51 @@ everything is idle, the last one you talked to stays. `GET /status`
 includes `host` and `host_tag`; `GET /health` lists every session with
 its `focus_ts`.
 
+### When the hub sleeps: a standby
+
+The hub is usually a laptop. Close its lid and the Bar goes dark — unless
+a second computer is a **standby**: it runs its own daemon, mirrors its
+sessions to the hub while the hub is up, and paints the Bar itself, over
+the Bar's own Wi-Fi, the moment the hub is gone. Nothing else changes:
+whenever the hub is awake, the hub decides what is shown.
+
+Once, on the computer with the Bar (over USB): put the Bar on your Wi-Fi
+(BUSY app → Wi-Fi; `curl http://10.0.4.20/api/wifi/status` shows its LAN
+address) and give its Wi-Fi API a key:
+
+```bash
+curl -X POST 'http://10.0.4.20/api/access?mode=key&key=1234567890'
+```
+
+Then on the standby (Windows: `py setup_claude.py ...`):
+
+```bash
+python3 setup_claude.py install --hub http://<hub-name>.local:8765 --standby \
+    --transport wifi --device <Bar LAN IP> --device-token 1234567890 --tag "#00A4EF"
+```
+
+- The standby takes over after three probes in a row fail (about 10 s) —
+  counted only while the Bar itself still answers, so a standby waking
+  from its *own* sleep never paints over a live hub — or when the hub
+  reports it cannot reach the Bar (unplugged). It hands back the moment
+  the hub answers again: resync first, then the hub repaints, then the
+  standby stops. `GET http://127.0.0.1:8765/standby` on it shows what it
+  thinks; `GET /hub` on either daemon shows role, style and device health.
+- Sessions are mirrored as ages, not timestamps (the two clocks may
+  disagree by seconds), `state` only when it changed (so even a hub
+  running an older daemon arbitrates as if the hooks had reached it
+  directly; the lease and `/redraw` need the current one), under a 90 s
+  lease refreshed every 30 s — a standby that vanishes takes its sessions
+  with it. A hub restart, or a hub that forgot a session while asleep, is
+  noticed and resynced within seconds.
+- Keep `--style` the same on both computers (the standby logs a warning
+  if not) and give the Bar and the hub DHCP reservations. The key grants
+  full control of the Bar to anyone on your Wi-Fi: use 10 digits, keep
+  the Bar on a trusted network, rotate it over USB if a computer is lost.
+  `--no-standby` turns a standby back into a plain forwarder.
+- `install` ends with two probes — the hub, and the Bar with the key just
+  written — so a wrong key or a closed port is caught right there.
+
 ## The on-device app (waiting on firmware ≥ 1.2.0)
 
 `device_app/` + `install_app.py` contain a complete **"Claude Status" JS
@@ -229,8 +274,8 @@ Things discovered the hard way, verified on-device:
 | File | Purpose |
 | --- | --- |
 | `daemon.py` | session store + `/status` + device renderer (stdlib only) |
-| `report.py` / `report.sh` | statusline/hook forwarder; auto-spawns the daemon, or forwards to a LAN hub when `BUSYBAR_HUB` is set (`.py` = cross-platform, `.sh` = POSIX legacy) |
-| `setup_claude.py` | wire into / out of `~/.claude` (with backups); `--lan` / `--hub` / `--tag` / `--token` for several computers |
+| `report.py` / `report.sh` | statusline/hook forwarder; auto-spawns the daemon, or forwards to a LAN hub when `BUSYBAR_HUB` is set (unless `BUSYBAR_STANDBY`) (`.py` = cross-platform, `.sh` = POSIX legacy) |
+| `setup_claude.py` | wire into / out of `~/.claude` (with backups); `--lan` / `--hub` / `--standby` / `--tag` / `--token` / `--style` for several computers |
 | `animgen.py` | `.anim` (bicycle0) encoder + the six ring animations |
 | `claude_card.py` | bind the CUSTOM key to the claude theme (and restore) |
 | `install_app.py`, `device_app/` | the future on-device JS app |
@@ -244,5 +289,8 @@ Things discovered the hard way, verified on-device:
 
 Not affiliated with BUSY or Anthropic. Tested on BUSY Bar firmware
 1.1.1 with Claude Code 2.x: the daemon on macOS (Bar on USB), plus a
-Windows machine as a hub client over Wi-Fi. The firmware quirks above
-may change in any update. MIT licensed.
+Windows machine as a hub client over Wi-Fi. The standby role was
+verified on the Mac with a second daemon (`daemon.py --port 8766`)
+driving the Bar over Wi-Fi while the hub was frozen (`SIGSTOP`) — not yet
+from a real Windows standby. The firmware quirks above may change in any
+update. MIT licensed.

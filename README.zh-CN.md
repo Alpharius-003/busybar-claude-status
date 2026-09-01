@@ -5,7 +5,7 @@
 
 [English docs](README.md) ｜ 支持 macOS / Linux / **Windows**（Windows 用
 `py setup_claude.py install`，胶水层为纯 Python 无 bash 依赖；硬件实测：
-macOS 直连 Bar，Windows 作为枢纽客户端经 Wi-Fi 转发）｜ 安装：`python3 setup_claude.py install`
+macOS 直连 Bar，Windows 作为枢纽客户端经 Wi-Fi 转发；备用枢纽在 Mac 上用第二个 daemon 冻结枢纽验证，尚未在真实 Windows 上跑过）｜ 安装：`python3 setup_claude.py install`
 （自动备份并接入 `~/.claude` 的 statusline 与 hooks，`uninstall` 可完整还原；
 动画资产用 `python3 animgen.py anims/` 生成后经 `/api/assets/upload` 上传，
 详见英文 README 的 Install 一节）。
@@ -140,6 +140,44 @@ python3 setup_claude.py install --hub http://<枢纽主机名>.local:8765 --tag 
 工具调用和 statusline 刷新永远不会。它空闲后才轮到仍在跑的后台会话；
 全都空闲时停在你最后说话的那个。`GET /status` 带 `host` / `host_tag`，
 `GET /health` 列出每个会话的 `focus_ts`。
+
+### 枢纽休眠怎么办：备用枢纽（standby）
+
+枢纽通常是台笔记本，合盖即睡，屏幕就黑了——除非另一台电脑做**备用枢纽**：
+它自己跑一个 daemon，枢纽醒着时把本机会话镜像给枢纽，枢纽一消失就经 Bar
+自己的 Wi-Fi 亲自画屏。其他一概不变：只要枢纽醒着，显示谁仍由枢纽决定。
+
+一次性准备，在插着 Bar 的电脑上经 USB 做：把 Bar 连上你的 Wi-Fi（BUSY
+App → Wi-Fi；`curl http://10.0.4.20/api/wifi/status` 能看到它的局域网地址），
+再给它的 Wi-Fi API 设一个 key：
+
+```bash
+curl -X POST 'http://10.0.4.20/api/access?mode=key&key=1234567890'
+```
+
+然后在备用电脑上（Windows 用 `py setup_claude.py ...`）：
+
+```bash
+python3 setup_claude.py install --hub http://<枢纽主机名>.local:8765 --standby \
+    --transport wifi --device <Bar 的局域网 IP> --device-token 1234567890 --tag "#00A4EF"
+```
+
+- 连续 3 次探测失败（约 10 s）才接管——而且只在 Bar 本身仍可达时才计数，
+  所以备用电脑自己从休眠醒来绝不会误画到活着的枢纽头上；枢纽报告自己
+  够不着 Bar（USB 被拔）时也会接管。枢纽一应答就立刻交还：先同步，再让
+  枢纽重绘，最后自己停笔。备用端 `GET http://127.0.0.1:8765/standby` 看它
+  的判断；任一 daemon 的 `GET /hub` 看角色、样式和设备连通性。
+- 会话镜像传"年龄"而非时间戳（两台电脑的时钟可能差几秒），`state` 只在
+  变化时发（连旧版 daemon 的枢纽也能像 hooks 直达时那样仲裁；租约和
+  `/redraw` 需要新版），带 90 s 租约、每 30 s 续一次——备用端消失，它的会话
+  随之消失；枢纽重启、或枢纽睡着期间忘了某个会话，几秒内就被察觉并重新
+  同步。
+- 两台电脑的 `--style` 保持一致（不一致备用端日志会提醒）；给 Bar 和枢纽
+  绑 DHCP 保留地址。这个 key 等于把 Bar 的完全控制权交给同一 Wi-Fi 上的
+  任何人：用 10 位数字、只在可信网络用、电脑丢了就经 USB 换 key。
+  `--no-standby` 把备用端改回纯转发。
+- `install` 结束时会探测枢纽和 Bar（用刚写入的凭据），key 写错、端口没开
+  当场就能看到。
 
 ## 固件坑位实录（1.1.1）
 
